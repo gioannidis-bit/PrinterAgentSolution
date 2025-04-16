@@ -7,6 +7,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "PrinterAgent.Core", "Printe
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "PrinterAgentService", "PrinterAgentService\PrinterAgentService.csproj", "{29E898A8-AA89-4763-BC8A-EA02D3565EBD}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "PrinterAgentWebUI", "PrinterAgentWebUI\PrinterAgentWebUI.csproj", "{6122D18D-5E75-4DEF-9067-FACD88465B0C}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -21,6 +23,10 @@ Global
 		{29E898A8-AA89-4763-BC8A-EA02D3565EBD}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{29E898A8-AA89-4763-BC8A-EA02D3565EBD}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{29E898A8-AA89-4763-BC8A-EA02D3565EBD}.Release|Any CPU.Build.0 = Release|Any CPU
+		{6122D18D-5E75-4DEF-9067-FACD88465B0C}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{6122D18D-5E75-4DEF-9067-FACD88465B0C}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{6122D18D-5E75-4DEF-9067-FACD88465B0C}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{6122D18D-5E75-4DEF-9067-FACD88465B0C}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

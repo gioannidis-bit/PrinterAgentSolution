@@ -1,0 +1,136 @@
+﻿@{
+    ViewBag.Title = "Send Test Print";
+}
+
+<hr />
+
+<h3>Send Test Print</h3>
+<form id="testPrintForm" asp-controller="Printer" asp-action="TestPrint" method="post">
+    <div class="mb-3">
+        <label for="agentId" class="form-label">Select Agent</label>
+        <select id="agentId" name="agentId" class="form-select">
+            <option value="">-- Select Agent --</option>
+            <!-- Options will be populated dynamically -->
+        </select>
+    </div>
+    <div class="mb-3">
+        <label for="printerName" class="form-label">Select Printer</label>
+        <select id="printerName" name="printerName" class="form-select">
+            <option value="">-- Select Printer --</option>
+            <!-- Options will be populated based on selected agent -->
+        </select>
+    </div>
+    <div class="mb-3">
+        <label for="landscape" class="form-label">Landscape Orientation:</label>
+        <input type="checkbox" id="landscape" name="landscape" value="true" /> Yes
+    </div>
+    <div class="mb-3">
+        <label for="paperSize" class="form-label">Paper Size:</label>
+        <select id="paperSize" name="paperSize" class="form-select" required>
+            <option value="A4">A4</option>
+            <option value="Letter">Letter</option>
+            <!-- Add more sizes if needed -->
+        </select>
+    </div>
+    <div class="mb-3">
+        <label for="documentContent" class="form-label">Document Content</label>
+        <textarea id="documentContent" name="documentContent" class="form-control" rows="6">
+<html>
+<body>
+        <h2>Test Print</h2>
+        <p>Your content here...</p>
+</body>
+</html>
+        </textarea>
+    </div>
+    <button type="submit" class="btn btn-primary">Send Test Print</button>
+</form>
+
+<div id="statusMessage" class="mt-3"></div>
+@if (ViewBag.Message != null)
+{
+    <div class="mt-3 alert alert-info">
+        <strong>@ViewBag.Message</strong>
+    </div>
+}
+
+@section Scripts {
+    <!-- Include jQuery from a CDN -->
+    <script src="https://code.jquery.com/jquery-3.6.0.min.js"
+            integrity="sha256-/xUj+3OJ8jx6Xdt9dweF6/U2WF5AnfF0uO6dVQ/6Z1Y="
+            crossorigin="anonymous"></script>
+    <script>
+        // Global object to store agent data by AgentId.
+        var agentsData = {};
+
+        // Function to load agent data via AJAX from /api/printerdata
+        function loadAgentData() {
+            $.ajax({
+                url: '/api/printerdata',
+                type: 'GET',
+                success: function (data) {
+                    updateAgentTable(data);
+                    populateAgentDropdown(data);
+                },
+                error: function (xhr, status, error) {
+                    console.error('Error fetching agent data:', error);
+                }
+            });
+        }
+
+        // Update the dashboard table with agent info.
+        function updateAgentTable(data) {
+            var tbody = $('#agentStatusTable');
+            tbody.empty();
+            var now = new Date();
+            $.each(data, function(index, agent) {
+                // Convert the agent's timestamp into a Date.
+                var agentTimestamp = new Date(agent.timestamp);
+                // Determine if the agent is online (last update within 60 seconds).
+                var diffSec = (now - agentTimestamp) / 1000;
+                var status = diffSec < 60 ? 'Online' : 'Offline';
+                var color = diffSec < 60 ? 'green' : 'red';
+                var row = `<tr>
+                    <td>${agent.agentId}</td>
+                    <td style="color: ${color}; font-weight: bold;">${status}</td>
+                    <td>${agent.timestamp}</td>
+                </tr>`;
+                tbody.append(row);
+                // Save the agent data for later use.
+                agentsData[agent.agentId] = agent;
+            });
+        }
+
+        // Populate the Agent dropdown with available agents.
+        function populateAgentDropdown(data) {
+            var agentDropdown = $('#agentId');
+            // Remove all but the first default option.
+            agentDropdown.find('option:not(:first)').remove();
+            $.each(data, function(index, agent) {
+                var option = `<option value="${agent.agentId}">${agent.agentId}</option>`;
+                agentDropdown.append(option);
+            });
+        }
+
+        // When the agent dropdown changes, update the printer dropdown.
+        $('#agentId').on('change', function() {
+            var selectedAgent = $(this).val();
+            var printerDropdown = $('#printerName');
+            printerDropdown.empty();
+            printerDropdown.append('<option value="">-- Select Printer --</option>');
+            if (selectedAgent && agentsData[selectedAgent]) {
+                var printers = agentsData[selectedAgent].printers;
+                $.each(printers, function(index, printer) {
+                    var option = `<option value="${printer}">${printer}</option>`;
+                    printerDropdown.append(option);
+                });
+            }
+        });
+
+        // On document ready, load agent data immediately and set interval for auto-refresh.
+        $(document).ready(function() {
+            loadAgentData(); // Initial load.
+            //setInterval(loadAgentData, 10000); // Refresh every 10 seconds.
+        });
+    </script>
+}

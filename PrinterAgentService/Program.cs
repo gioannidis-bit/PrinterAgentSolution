@@ -1,8 +1,5 @@
-using PrinterAgentService;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
-using Microsoft.Extensions.Hosting.WindowsServices;
-
 
 namespace PrinterAgentService
 {
@@ -13,10 +10,10 @@ namespace PrinterAgentService
             CreateHostBuilder(args).Build().Run();
         }
 
-        // Use WindowsService lifetime when built for production.
+        // Host builder; if planning to run as a Windows Service, UseWindowsService() can be enabled.
         public static IHostBuilder CreateHostBuilder(string[] args) =>
             Host.CreateDefaultBuilder(args)
-                .UseWindowsService() // This enables running as a Windows service.
+                //.UseWindowsService()  // Uncomment if deploying as a Windows Service.
                 .ConfigureServices((hostContext, services) =>
                 {
                     services.AddHostedService<Worker>();

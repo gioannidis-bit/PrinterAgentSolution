@@ -1,0 +1,92 @@
+﻿@model IEnumerable<PrinterAgent.WebUI.Controllers.AgentData>
+
+@{
+    ViewBag.Title = "Dashboard - Agents and Printers";
+}
+
+<h2>Dashboard</h2>
+
+<table class="table table-bordered">
+    <thead>
+        <tr>
+            <th>Agent ID</th>
+            <th>Status</th>
+            <th>Last Update (UTC)</th>
+        </tr>
+    </thead>
+    <tbody id="agentStatusTable">
+        <!-- Rows will be populated dynamically via AJAX -->
+    </tbody>
+</table>
+
+<hr />
+
+
+@section Scripts {
+    <!-- Include jQuery from a CDN -->
+    <script src="https://code.jquery.com/jquery-3.6.0.min.js"
+            integrity="sha256-/xUj+3OJ8jx6Xdt9dweF6/U2WF5AnfF0uO6dVQ/6Z1Y="
+            crossorigin="anonymous"></script>
+    <script>
+        // Global object to store agent data by AgentId.
+        var agentsData = {};
+
+        // Function to load agent data via AJAX from /api/printerdata
+        function loadAgentData() {
+            $.ajax({
+                url: '/api/printerdata',
+                type: 'GET',
+                success: function (data) {
+                    updateAgentTable(data);
+                },
+                error: function (xhr, status, error) {
+                    console.error('Error fetching agent data:', error);
+                }
+            });
+        }
+
+        // Update the dashboard table with agent info.
+             function updateAgentTable(data) {
+            var tbody = $('#agentStatusTable');
+            tbody.empty();
+            var now = new Date();
+            $.each(data, function(index, agent) {
+                // Convert the agent's timestamp into a Date object.
+                var agentTimestamp = new Date(agent.timestamp);
+                // Determine if the agent is online (last update within 60 seconds).
+                var diffSec = (now - agentTimestamp) / 1000;
+                var status = diffSec < 60 ? 'Online' : 'Offline';
+                var color = diffSec < 60 ? 'green' : 'red';
+
+                // Format the date to show local date and time without fractional seconds.
+                // This uses the current locale, but you can specify one if needed (e.g., 'en-GB').
+                  var formattedTimestamp = agentTimestamp.toLocaleString("en-GB", {
+                    year: 'numeric',
+                    month: '2-digit',
+                    day: '2-digit',
+                    hour: '2-digit',
+                    minute: '2-digit',
+                    second: '2-digit'
+                });
+
+                var row = `<tr>
+                    <td>${agent.agentId}</td>
+                    <td style="color: ${color}; font-weight: bold;">${status}</td>
+                    <td>${formattedTimestamp}</td>
+                </tr>`;
+                tbody.append(row);
+                // Save the agent data for later use.
+                agentsData[agent.agentId] = agent;
+            });
+        }
+
+
+       
+
+        // On document ready, load agent data immediately and set interval for auto-refresh.
+        $(document).ready(function() {
+            loadAgentData(); // Initial load.
+            setInterval(loadAgentData, 5000); // Refresh every 10 seconds.
+        });
+    </script>
+}
