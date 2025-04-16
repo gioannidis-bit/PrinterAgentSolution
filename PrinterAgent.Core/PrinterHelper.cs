@@ -1,14 +1,21 @@
 ﻿using System.Collections.Generic;
 using System.Drawing.Printing;
+using System.Runtime.Versioning;
+
 
 namespace PrinterAgent.Core
 {
+    [SupportedOSPlatform("windows6.1")]
     public static class PrinterHelper
     {
         // Returns a list of installed printer names.
         public static List<string> GetInstalledPrinters()
         {
             List<string> printers = new List<string>();
+            if (!OperatingSystem.IsWindows())
+            {
+                throw new PlatformNotSupportedException("This API is supported only on Windows.");
+            }
             foreach (string printer in PrinterSettings.InstalledPrinters)
             {
                 printers.Add(printer);

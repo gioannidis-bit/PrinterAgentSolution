@@ -1,6 +1,8 @@
 using PrinterAgentService;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Hosting.WindowsServices;
+
 
 namespace PrinterAgentService
 {
