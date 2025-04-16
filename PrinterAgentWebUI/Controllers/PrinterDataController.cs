@@ -1,4 +1,5 @@
 ﻿using Microsoft.AspNetCore.Mvc;
+using PrinterAgent.Core;
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
@@ -17,7 +18,7 @@ namespace PrinterAgent.WebUI.Controllers
     {
         public string AgentId { get; set; }
         public DateTime Timestamp { get; set; }
-        public List<string> Printers { get; set; }
+        public List<PrinterInfo> Printers { get; set; }
     }
 
     [ApiController]

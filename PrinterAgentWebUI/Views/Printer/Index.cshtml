@@ -1,6 +1,6 @@
 ﻿@model IEnumerable<PrinterAgent.WebUI.Controllers.AgentData>
-
 @{
+    Layout = "_Layout";
     ViewBag.Title = "Dashboard - Agents and Printers";
 }
 
@@ -15,78 +15,108 @@
         </tr>
     </thead>
     <tbody id="agentStatusTable">
-        <!-- Rows will be populated dynamically via AJAX -->
+        <!-- Populated by JS -->
     </tbody>
 </table>
 
 <hr />
 
+<h3>Printer Status by Agent</h3>
+<div class="mb-3">
+    <label for="agentSelect" class="form-label">Choose Agent</label>
+    <select id="agentSelect" class="form-select">
+        <option value="">-- Select an Agent --</option>
+    </select>
+</div>
+
+<table class="table">
+    <thead>
+        <tr>
+            <th>Printer Name</th>
+            <th>Status</th>
+        </tr>
+    </thead>
+    <tbody id="printerTableBody">
+        <!-- Populated by JS -->
+    </tbody>
+</table>
 
 @section Scripts {
-    <!-- Include jQuery from a CDN -->
-    <script src="https://code.jquery.com/jquery-3.6.0.min.js"
-            integrity="sha256-/xUj+3OJ8jx6Xdt9dweF6/U2WF5AnfF0uO6dVQ/6Z1Y="
-            crossorigin="anonymous"></script>
     <script>
-        // Global object to store agent data by AgentId.
+        // Holds latest agent → printer info
         var agentsData = {};
 
-        // Function to load agent data via AJAX from /api/printerdata
+           function updateAgentTable(data) {
+        var tbody = $('#agentStatusTable');
+        tbody.empty();
+        var now = new Date();
+        $.each(data, function(index, agent) {
+            // Convert the agent's timestamp into a Date object.
+            var agentTimestamp = new Date(agent.timestamp);
+            // Determine if the agent is online (last update within 60 seconds).
+            var diffSec = (now - agentTimestamp) / 1000;
+            var status = diffSec < 60 ? 'Online' : 'Offline';
+            var color = diffSec < 60 ? 'green' : 'red';
+
+            // Format the date to European format with day first.
+            var formattedTimestamp = agentTimestamp.toLocaleString("en-GB", {
+                day: '2-digit',
+                month: '2-digit',
+                year: 'numeric',
+                hour: '2-digit',
+                minute: '2-digit',
+                second: '2-digit'
+            });
+
+            var row = `<tr>
+                <td>${agent.agentId}</td>
+                <td style="color: ${color}; font-weight: bold;">${status}</td>
+                <td>${formattedTimestamp}</td>
+            </tr>`;
+            tbody.append(row);
+            // Save the agent data for later use.
+            agentsData[agent.agentId] = agent;
+        });
+        }
+
+        function populateAgentDropdown(data) {
+          var select = $('#agentSelect').empty()
+            .append('<option value="">-- Select an Agent --</option>');
+
+          data.forEach(function(agent) {
+            select.append(`<option value="${agent.agentId}">${agent.agentId}</option>`);
+          });
+        }
+
+        // When you pick an agent, show its printers
+        $('#agentSelect').on('change', function() {
+          var agentId = $(this).val();
+          var body = $('#printerTableBody').empty();
+
+          if (!agentId || !agentsData[agentId]) return;
+
+          agentsData[agentId].printers.forEach(function(p) {
+            // background color
+            var bgClass = p.status === 'Online' ? 'bg-success'
+                         : 'bg-danger';
+            body.append(`
+              <tr>
+                <td>${p.name}</td>
+                <td class="${bgClass} text-white">${p.status}</td>
+              </tr>`);
+          });
+        });
+
         function loadAgentData() {
-            $.ajax({
-                url: '/api/printerdata',
-                type: 'GET',
-                success: function (data) {
-                    updateAgentTable(data);
-                },
-                error: function (xhr, status, error) {
-                    console.error('Error fetching agent data:', error);
-                }
-            });
+          $.getJSON('/api/printerdata', function(data) {
+            updateAgentTable(data);
+            populateAgentDropdown(data);
+          });
         }
 
-        // Update the dashboard table with agent info.
-             function updateAgentTable(data) {
-            var tbody = $('#agentStatusTable');
-            tbody.empty();
-            var now = new Date();
-            $.each(data, function(index, agent) {
-                // Convert the agent's timestamp into a Date object.
-                var agentTimestamp = new Date(agent.timestamp);
-                // Determine if the agent is online (last update within 60 seconds).
-                var diffSec = (now - agentTimestamp) / 1000;
-                var status = diffSec < 60 ? 'Online' : 'Offline';
-                var color = diffSec < 60 ? 'green' : 'red';
-
-                // Format the date to show local date and time without fractional seconds.
-                // This uses the current locale, but you can specify one if needed (e.g., 'en-GB').
-                  var formattedTimestamp = agentTimestamp.toLocaleString("en-GB", {
-                    year: 'numeric',
-                    month: '2-digit',
-                    day: '2-digit',
-                    hour: '2-digit',
-                    minute: '2-digit',
-                    second: '2-digit'
-                });
-
-                var row = `<tr>
-                    <td>${agent.agentId}</td>
-                    <td style="color: ${color}; font-weight: bold;">${status}</td>
-                    <td>${formattedTimestamp}</td>
-                </tr>`;
-                tbody.append(row);
-                // Save the agent data for later use.
-                agentsData[agent.agentId] = agent;
-            });
-        }
-
-
-       
-
-        // On document ready, load agent data immediately and set interval for auto-refresh.
         $(document).ready(function() {
-            loadAgentData(); // Initial load.
-            setInterval(loadAgentData, 5000); // Refresh every 10 seconds.
+          loadAgentData();
+          setInterval(loadAgentData, 10000); // every 10s
         });
     </script>
 }
