@@ -2,7 +2,6 @@
 using Microsoft.AspNetCore.SignalR;
 using PrinterAgent.Core;
 using PrinterAgent.WebUI.Hubs;
-using PrinterAgent.WebUI.Controllers;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -23,9 +22,10 @@ namespace PrinterAgent.WebUI.Controllers
             ViewBag.SelectedAgentId = agentId;
             ViewBag.SelectedPrinterName = printerName;
 
-            // Περνάμε τη λίστα των agents στο view για την dropdown λίστα
+            // Περνάμε τη λίστα των agents στο view, 
+            // φιλτράροντας μόνο τους online agents
             ViewBag.Agents = AgentDataStore.Data.Values
-                .Where(a => a.IsOnline) // Φιλτράρουμε μόνο τους online agents
+                .Where(a => a.IsOnline)
                 .ToList();
 
             return View();

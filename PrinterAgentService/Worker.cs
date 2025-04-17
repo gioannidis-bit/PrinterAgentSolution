@@ -17,11 +17,14 @@ namespace PrinterAgentService
     public class Worker : BackgroundService
     {
         private readonly ILogger<Worker> _logger;
-        private readonly HttpClient _httpClient;
         private HubConnection _hub;
         private int _reconnectAttempts = 0;
         private const int MAX_RECONNECT_ATTEMPTS = 10;
         private const int RECONNECT_DELAY_MS = 5000;
+        private readonly HttpClientHandler _handler;
+        private bool _serverWasDown = false;
+        private Timer _serverCheckTimer;
+        private readonly TimeSpan _serverCheckInterval = TimeSpan.FromSeconds(5);
 
         // Server endpoints
         private const string ServerBase = "https://192.168.14.121:7199";
@@ -33,14 +36,13 @@ namespace PrinterAgentService
         public Worker(ILogger<Worker> logger)
         {
             _logger = logger;
-            // HttpClient that ignores certificate errors (development only)
-            var handler = new HttpClientHandler
+            // Shared handler that ignores certificate errors (development only)
+            _handler = new HttpClientHandler
             {
                 ServerCertificateCustomValidationCallback = (_, _, _, _) => true
             };
-            _httpClient = new HttpClient(handler);
 
-            // Διασφάλιση ότι το GUID του agent είναι σταθερό
+            // Ensure stable GUID and location
             var settingsPath = Path.Combine(AppContext.BaseDirectory, "agent.settings.json");
             if (File.Exists(settingsPath))
             {
@@ -90,8 +92,10 @@ namespace PrinterAgentService
 
         public override async Task StartAsync(CancellationToken cancellationToken)
         {
-            // Αναδιοργάνωση της μεθόδου για καλύτερο χειρισμό σφαλμάτων
             await InitializeHubConnection();
+
+            // Start timer to check server status
+            _serverCheckTimer = new Timer(CheckServerStatus, null, TimeSpan.Zero, _serverCheckInterval);
 
             try
             {
@@ -100,80 +104,113 @@ namespace PrinterAgentService
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Error starting the worker, will retry on next cycle");
-                // Δεν θέλουμε να σταματήσει την εκτέλεση του service αν αποτύχει η αρχική σύνδεση
+                _logger.LogError(ex, "Error starting the worker, will retry");
+                _serverWasDown = true;
+                // We'll retry from the timer
             }
+        }
+
+        private void CheckServerStatus(object state)
+        {
+            _ = CheckServerAndReconnectAsync();
+        }
+
+        private async Task CheckServerAndReconnectAsync()
+        {
+            try
+            {
+                // New HttpClient per request, do not dispose shared handler
+                using var httpClient = new HttpClient(_handler, disposeHandler: false)
+                {
+                    Timeout = TimeSpan.FromSeconds(3)
+                };
+
+                var response = await httpClient.GetAsync($"{ServerBase}/health", HttpCompletionOption.ResponseHeadersRead);
+                bool serverIsUp = response.IsSuccessStatusCode;
+
+                if (serverIsUp && _serverWasDown && (_hub == null || _hub.State != HubConnectionState.Connected))
+                {
+                    _logger.LogInformation("Server is back online. Attempting immediate reconnection...");
+                    _serverWasDown = false;
+                    _reconnectAttempts = 0;
+                    await ReconnectNowAsync();
+                }
+                else if (!serverIsUp)
+                {
+                    _serverWasDown = true;
+                    _logger.LogWarning("Server appears to be down. Will retry later.");
+                }
+            }
+            catch (Exception ex)
+            {
+                _serverWasDown = true;
+                _logger.LogWarning("Failed to check server status: {Message}. Will retry.", ex.Message);
+            }
+        }
+
+        private async Task ReconnectNowAsync()
+        {
+            if (_hub?.State == HubConnectionState.Connected)
+                return;
+            if (_hub?.State == HubConnectionState.Reconnecting || _hub?.State == HubConnectionState.Connecting)
+                return;
+
+            await InitializeHubConnection();
+            await _hub.StartAsync();
+            _logger.LogInformation("Successfully reconnected to server");
+
+            await _hub.InvokeAsync("RegisterAgent", _agentId, Environment.MachineName, _location);
+            _logger.LogInformation("Successfully re-registered agent with server");
         }
 
         private async Task InitializeHubConnection()
         {
-            // SignalR handler that ignores SSL errors (development only)
+            if (_hub != null)
+            {
+                try { await _hub.DisposeAsync(); }
+                catch (Exception ex) { _logger.LogWarning(ex, "Error disposing previous hub connection"); }
+            }
+
             var signalRHandler = new HttpClientHandler
             {
                 ServerCertificateCustomValidationCallback = HttpClientHandler.DangerousAcceptAnyServerCertificateValidator
             };
 
-            // Build the SignalR connection
             _hub = new HubConnectionBuilder()
-                .WithUrl(_hubUrl, options =>
-                {
-                    options.HttpMessageHandlerFactory = _ => signalRHandler;
-                })
+                .WithUrl(_hubUrl, options => options.HttpMessageHandlerFactory = _ => signalRHandler)
                 .WithAutomaticReconnect(new CustomRetryPolicy(MAX_RECONNECT_ATTEMPTS, RECONNECT_DELAY_MS))
                 .Build();
 
-            // Event handlers for connection management
-            _hub.Closed += async (error) =>
+            _hub.Closed += async error =>
             {
                 _logger.LogWarning("Connection closed: {Error}", error?.Message);
-                await Task.Delay(RECONNECT_DELAY_MS); // Περιμένουμε λίγο πριν προσπαθήσουμε reconnect
+                await Task.Delay(RECONNECT_DELAY_MS);
             };
-
-            // Όταν επανασυνδεθούμε, κάνουμε register ξανά
-            _hub.Reconnected += async (connectionId) =>
+            _hub.Reconnected += async connectionId =>
             {
                 _logger.LogInformation("SignalR reconnected with connectionId={ConnectionId}, re-registering agent", connectionId);
                 _reconnectAttempts = 0;
                 await RegisterAgent(CancellationToken.None);
             };
-
-            // Όταν προσπαθούμε να επανασυνδεθούμε, καταγράφουμε το γεγονός
-            _hub.Reconnecting += (error) =>
+            _hub.Reconnecting += error =>
             {
                 _logger.LogWarning("Attempting to reconnect: {Error}", error?.Message);
                 return Task.CompletedTask;
             };
 
-            // Handle incoming print requests
             _hub.On<PrintRequest>("Print", req =>
             {
                 _logger.LogInformation("Print request received: Printer={Printer}", req.PrinterName);
-                PrinterHelper.SendTestPrint(
-                    req.PrinterName,
-                    req.DocumentContent,
-                    null,               // no image
-                    req.Landscape,
-                    req.PaperSize
-                );
+                PrinterHelper.SendTestPrint(req.PrinterName, req.DocumentContent, null, req.Landscape, req.PaperSize);
             });
 
-            // Νέο handler για ενημέρωση της τοποθεσίας
-            _hub.On<string>("UpdateLocation", async (newLocation) =>
+            _hub.On<string>("UpdateLocation", async newLocation =>
             {
                 _logger.LogInformation("Location update request received: {NewLocation}", newLocation);
                 _location = newLocation;
                 SaveAgentSettings();
-
-                // Στέλνουμε επιβεβαίωση πίσω στον server
-                try
-                {
-                    await _hub.InvokeAsync("LocationUpdated", _agentId, _location);
-                    _logger.LogInformation("Location updated successfully");
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogError(ex, "Error confirming location update");
-                }
+                try { await _hub.InvokeAsync("LocationUpdated", _agentId, _location); }
+                catch (Exception ex) { _logger.LogError(ex, "Error confirming location update"); }
             });
         }
 
@@ -183,19 +220,16 @@ namespace PrinterAgentService
             {
                 await _hub.StartAsync(cancellationToken);
                 _logger.LogInformation("Connected to PrintHub at {Url}", _hubUrl);
-
                 await RegisterAgent(cancellationToken);
                 _reconnectAttempts = 0;
             }
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Failed to connect to hub");
-                // Αυξάνουμε τις προσπάθειες και δοκιμάζουμε αργότερα
                 if (_reconnectAttempts < MAX_RECONNECT_ATTEMPTS)
                 {
                     _reconnectAttempts++;
-                    _logger.LogInformation("Will retry connection (attempt {Attempt}/{MaxAttempts})",
-                                         _reconnectAttempts, MAX_RECONNECT_ATTEMPTS);
+                    _logger.LogInformation("Will retry connection (attempt {Attempt}/{MaxAttempts})", _reconnectAttempts, MAX_RECONNECT_ATTEMPTS);
                 }
                 else
                 {
@@ -210,7 +244,6 @@ namespace PrinterAgentService
         {
             try
             {
-                // Στέλνουμε και την τοποθεσία μαζί με τα άλλα στοιχεία
                 await _hub.InvokeAsync("RegisterAgent", _agentId, Environment.MachineName, _location, cancellationToken);
                 _logger.LogInformation("Registered agent ID '{AgentId}' successfully", _agentId);
             }
@@ -229,57 +262,35 @@ namespace PrinterAgentService
             {
                 try
                 {
-                    // Αν δεν είμαστε συνδεδεμένοι, προσπαθούμε να συνδεθούμε
                     if (_hub.State != HubConnectionState.Connected)
                     {
                         _logger.LogWarning("Hub not connected (state: {State}), attempting to reconnect", _hub.State);
-                        try
-                        {
-                            await ConnectToHub(stoppingToken);
-                        }
-                        catch
-                        {
-                            // Αν αποτύχει, θα ξαναπροσπαθήσουμε στον επόμενο κύκλο
-                            await Task.Delay(RECONNECT_DELAY_MS, stoppingToken);
-                            continue;
-                        }
+                        try { await ConnectToHub(stoppingToken); }
+                        catch { await Task.Delay(RECONNECT_DELAY_MS, stoppingToken); continue; }
                     }
 
-                    // Heartbeat: send list of PrinterInfo objects (Name + Status)
-                    List<PrinterInfo> printers = PrinterHelper.GetInstalledPrinters();
-                    _logger.LogInformation(
-                        "Discovered printers: {List}",
-                        string.Join(", ", printers.Select(p => p.Name))
-                    );
+                    var printers = PrinterHelper.GetInstalledPrinters();
+                    _logger.LogInformation("Discovered printers: {List}", string.Join(", ", printers.Select(p => p.Name)));
 
-                    // Ενημερώνουμε τη λίστα εκτυπωτών και στο hub
                     if (_hub.State == HubConnectionState.Connected)
                     {
-                        try
-                        {
-                            await _hub.InvokeAsync("UpdatePrinters", _agentId, printers, stoppingToken);
-                            _logger.LogInformation("Printer list updated in hub");
-                        }
-                        catch (Exception ex)
-                        {
-                            _logger.LogError(ex, "Error updating printers in hub");
-                        }
+                        try { await _hub.InvokeAsync("UpdatePrinters", _agentId, printers, stoppingToken); }
+                        catch (Exception ex) { _logger.LogError(ex, "Error updating printers in hub"); }
                     }
 
-                    // Στέλνουμε heartbeat και στο API endpoint
+                    using var httpClient = new HttpClient(_handler, disposeHandler: false);
                     var payload = new
                     {
                         AgentId = _agentId,
                         MachineName = Environment.MachineName,
-                        Location = _location, // Προσθήκη του πεδίου τοποθεσίας
+                        Location = _location,
                         Timestamp = DateTime.UtcNow,
                         Printers = printers
                     };
-
-                    string json = JsonSerializer.Serialize(payload);
+                    var json = JsonSerializer.Serialize(payload);
                     var content = new StringContent(json, Encoding.UTF8, "application/json");
+                    var resp = await httpClient.PostAsync(_dataUrl, content, stoppingToken);
 
-                    var resp = await _httpClient.PostAsync(_dataUrl, content, stoppingToken);
                     if (resp.IsSuccessStatusCode)
                         _logger.LogInformation("Heartbeat sent");
                     else
@@ -298,11 +309,12 @@ namespace PrinterAgentService
 
         public override async Task StopAsync(CancellationToken cancellationToken)
         {
+            _serverCheckTimer?.Dispose();
+
             if (_hub != null)
             {
                 try
                 {
-                    // Στέλνουμε ειδοποίηση αποσύνδεσης πριν κλείσουμε
                     if (_hub.State == HubConnectionState.Connected)
                     {
                         await _hub.InvokeAsync("UnregisterAgent", _agentId, cancellationToken);
@@ -323,14 +335,12 @@ namespace PrinterAgentService
         }
     }
 
-    // Κλάση για τις ρυθμίσεις του agent
     public class AgentSettings
     {
         public string AgentId { get; set; }
         public string Location { get; set; }
     }
 
-    // Custom retry policy για το SignalR reconnect
     public class CustomRetryPolicy : IRetryPolicy
     {
         private readonly int _maxAttempts;
@@ -345,14 +355,10 @@ namespace PrinterAgentService
         public TimeSpan? NextRetryDelay(RetryContext retryContext)
         {
             if (retryContext.PreviousRetryCount >= _maxAttempts)
-            {
                 return null;
-            }
 
-            // Προσθήκη ενός μικρού τυχαίου χρόνου για να αποφύγουμε συγχρονισμένες επαναπροσπάθειες
             var random = new Random();
             var jitter = random.Next(-1000, 1000);
-
             return TimeSpan.FromMilliseconds(_delayMs + jitter);
         }
     }

@@ -1,4 +1,5 @@
-﻿@{
+﻿@using PrinterAgent.WebUI.Controllers;
+@{
     ViewBag.Title = "Send Test Print";
     var selectedAgentId = ViewBag.SelectedAgentId ?? "";
     var selectedPrinterName = ViewBag.SelectedPrinterName ?? "";
@@ -13,18 +14,19 @@
     <div class="mb-3">
         <label for="agentId" class="form-label">Select Agent</label>
         <select id="agentId" name="agentId" class="form-select" required>
-            <option value="">-- Select Agent --</option>
+            <option value="">— Select Agent —</option>
             @if (ViewBag.Agents != null)
             {
-                foreach (var agent in ViewBag.Agents)
+                foreach (var agent in (List<AgentData>)ViewBag.Agents)
                 {
                     var displayText = agent.MachineName;
                     if (!string.IsNullOrEmpty(agent.Location))
                     {
-                        displayText += " (" + agent.Location + ")";
+                        displayText += $" ({agent.Location})";
                     }
-                    var selected = agent.AgentId == selectedAgentId ? "selected" : "";
-                    <option value="@agent.AgentId" @selected>@displayText</option>
+                    var isSelected = agent.AgentId == (string)ViewBag.SelectedAgentId;
+                    var selectedAttr = isSelected ? " selected" : "";
+                    @:<option value="@agent.AgentId"@selectedAttr>@displayText</option>
                 }
             }
         </select>

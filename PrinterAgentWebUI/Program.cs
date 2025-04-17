@@ -37,4 +37,12 @@ app.MapControllerRoute(
       pattern: "{controller=Dashboard}/{action=Index}/{id?}");
 
 
+app.Map("/health", appBuilder => {
+    appBuilder.Run(async context => {
+        context.Response.StatusCode = 200;
+        await context.Response.WriteAsync("OK");
+    });
+});
+
+
 app.Run();
