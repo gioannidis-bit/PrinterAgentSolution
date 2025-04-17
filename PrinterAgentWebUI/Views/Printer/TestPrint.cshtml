@@ -72,6 +72,7 @@
 }
 
 @section Scripts {
+          <script src="https://cdnjs.cloudflare.com/ajax/libs/microsoft-signalr/8.0.7/signalr.min.js"></script>
     <script>
         $(function() {
             var printersByAgent = {};
@@ -131,6 +132,28 @@
                     }
                 }, 500);
             }
+
+                    // 6) Live‑update via SignalR (retry until the server is up)
+             var hub = new signalR.HubConnectionBuilder()
+                 .withUrl('/printHub')
+               .withAutomaticReconnect()
+                 .build();
+    
+             hub.on('AgentStatusChanged', function() {
+                 console.log('AgentStatusChanged → reload');
+                 loadPrinterData();
+             });
+    
+             function startHub() {
+                 hub.start()
+                     .then(() => console.log('✅ SignalR connected'))
+                     .catch(err => {
+                         console.warn('⚠️ SignalR failed, retry in 5s:', err.toString());
+                         setTimeout(startHub, 5000);
+                     });
+             }
+           startHub();
+
         });
     </script>
 }

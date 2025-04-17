@@ -94,22 +94,11 @@ namespace PrinterAgentService
         {
             await InitializeHubConnection();
 
-            // Start timer to check server status
             _serverCheckTimer = new Timer(CheckServerStatus, null, TimeSpan.Zero, _serverCheckInterval);
 
-            try
-            {
-                await ConnectToHub(cancellationToken);
-                await base.StartAsync(cancellationToken);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "Error starting the worker, will retry");
-                _serverWasDown = true;
-                // We'll retry from the timer
-            }
+            await base.StartAsync(cancellationToken);
         }
-
+           
         private void CheckServerStatus(object state)
         {
             _ = CheckServerAndReconnectAsync();
@@ -216,10 +205,23 @@ namespace PrinterAgentService
 
         private async Task ConnectToHub(CancellationToken cancellationToken)
         {
+            // Only attempt StartAsync when we're fully Disconnected
+            if (_hub.State == HubConnectionState.Connected)
+            {
+                // already connected
+                return;
+            }
+            if (_hub.State != HubConnectionState.Disconnected)
+            {
+                _logger.LogInformation("Hub in state {State}, skipping StartAsync", _hub.State);
+                return;
+            }
+
             try
             {
                 await _hub.StartAsync(cancellationToken);
                 _logger.LogInformation("Connected to PrintHub at {Url}", _hubUrl);
+
                 await RegisterAgent(cancellationToken);
                 _reconnectAttempts = 0;
             }
@@ -229,13 +231,16 @@ namespace PrinterAgentService
                 if (_reconnectAttempts < MAX_RECONNECT_ATTEMPTS)
                 {
                     _reconnectAttempts++;
-                    _logger.LogInformation("Will retry connection (attempt {Attempt}/{MaxAttempts})", _reconnectAttempts, MAX_RECONNECT_ATTEMPTS);
+                    _logger.LogInformation(
+                    "Will retry connection (attempt {Attempt}/{MaxAttempts})",
+                    _reconnectAttempts, MAX_RECONNECT_ATTEMPTS);
                 }
                 else
                 {
                     _logger.LogWarning("Max reconnect attempts reached, will retry in next cycle");
                     _reconnectAttempts = 0;
                 }
+                // re‑throw so caller knows it failed
                 throw;
             }
         }
