@@ -10,6 +10,8 @@ using System.Text;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
+using System.IO;
+
 
 namespace PrinterAgentService
 {
@@ -23,6 +25,8 @@ namespace PrinterAgentService
         private const string ServerBase = "https://192.168.14.121:7199";
         private readonly string _dataUrl = $"{ServerBase}/api/printerdata";
         private readonly string _hubUrl = $"{ServerBase}/printHub";
+        private readonly string _agentId;
+
 
         public Worker(ILogger<Worker> logger)
         {
@@ -33,6 +37,15 @@ namespace PrinterAgentService
                 ServerCertificateCustomValidationCallback = (_, _, _, _) => true
             };
             _httpClient = new HttpClient(handler);
+
+            var path = Path.Combine(AppContext.BaseDirectory, "agent.id");
+            if (File.Exists(path))
+                _agentId = File.ReadAllText(path).Trim();
+            else
+            {
+                _agentId = Guid.NewGuid().ToString();
+                File.WriteAllText(path, _agentId);
+            }
         }
 
         public override async Task StartAsync(CancellationToken cancellationToken)
@@ -43,7 +56,7 @@ namespace PrinterAgentService
                 ServerCertificateCustomValidationCallback = HttpClientHandler.DangerousAcceptAnyServerCertificateValidator
             };
 
-            // Build the SignalR connection
+                 // Build the SignalR connection
             _hub = new HubConnectionBuilder()
                 .WithUrl(_hubUrl, options =>
                 {
@@ -51,6 +64,16 @@ namespace PrinterAgentService
                 })
                 .WithAutomaticReconnect()
                 .Build();
+
+
+            // 0) If we ever reconnect, re‑register our agentId
+            _hub.Reconnected += async connectionId =>
+            {
+                _logger.LogInformation("SignalR reconnected with connectionId={conn}, re‑registering agent", connectionId);
+                await _hub.InvokeAsync("RegisterAgent", _agentId, Environment.MachineName, cancellationToken);
+            }
+            ;
+
 
             // Handle incoming print requests
             _hub.On<PrintRequest>("Print", req =>
@@ -69,7 +92,7 @@ namespace PrinterAgentService
             _logger.LogInformation("Connected to PrintHub at {url}", _hubUrl);
 
             // Register this agent
-            await _hub.InvokeAsync("RegisterAgent", Environment.MachineName, cancellationToken);
+            await _hub.InvokeAsync("RegisterAgent", _agentId, Environment.MachineName, cancellationToken);
             _logger.LogInformation("Registered agent ID '{agent}'", Environment.MachineName);
 
             await base.StartAsync(cancellationToken);
@@ -91,7 +114,9 @@ namespace PrinterAgentService
 
                     var payload = new
                     {
-                        AgentId = Environment.MachineName,
+
+                        AgentId = _agentId,                 // GUID
+                        MachineName = Environment.MachineName,  // friendly name
                         Timestamp = DateTime.UtcNow,
                         Printers = printers   // now List<PrinterInfo>
                     };

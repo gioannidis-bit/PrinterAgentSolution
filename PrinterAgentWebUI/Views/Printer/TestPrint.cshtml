@@ -53,33 +53,42 @@
 }
 
 @section Scripts {
-    <script>
-       
-            // store agent → printer info
-            var agentsData = {};
+      <script>
+        $(function() {
+          var agentsData = {};
 
-                  function loadAgentData() {
-           $.getJSON('/api/printerdata', function(data) {
-             // rebuild our agentsData map
-             data.forEach(a => agentsData[a.agentId] = a);
-             // populate agent dropdown
-             var aSel = $('#agentId').empty()
-               .append('<option value="">-- Select Agent --</option>');
-             data.forEach(a => aSel.append(`<option>${a.agentId}</option>`));
-           });
-         }
-
-         // When agent changes, fill printers
-         $('#agentId').on('change', function() {
-           var id = $(this).val();
-           var printers = (agentsData[id]?.printers || []);
-           var pSel = $('#printerName').empty()
-             .append('<option value="">-- Select Printer --</option>');
-           printers.forEach(p => pSel.append(`<option value="${p.name}">${p.name}</option>`));
-         });
-
-                   $(function() {
-                loadAgentData();
+          // 1) Load agents & fill the Agent dropdown
+          function loadAgentData() {
+            $.getJSON('/api/printerdata', function(data) {
+              agentsData = {};
+              var $a = $('#agentId').empty()
+                        .append('<option value="">-- Select Agent --</option>');
+              data.forEach(function(agent) {
+                agentsData[agent.agentId] = agent;
+                $('<option>')
+                  .val(agent.agentId)
+                  .text(agent.machineName + ' (' + agent.agentId.substr(0,8) + ')')
+                  .appendTo($a);
               });
-    </script>
+            });
+          }
+
+          // 2) When agent changes, fill printers
+          $('#agentId').on('change', function() {
+            var list = agentsData[this.value]
+                       ? agentsData[this.value].printers
+                       : [];
+            var $p = $('#printerName').empty()
+                      .append('<option value="">-- Select Printer --</option>');
+            list.forEach(function(p) {
+              $('<option>')
+                .val(p.name)
+                .text(p.name)
+                .appendTo($p);
+            });
+          });
+
+          loadAgentData();
+        });
+      </script>
 }

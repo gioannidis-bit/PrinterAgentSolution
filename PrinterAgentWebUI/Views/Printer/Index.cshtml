@@ -43,80 +43,76 @@
 
 @section Scripts {
     <script>
-        // Holds latest agent → printer info
-        var agentsData = {};
+        $(function() {
+          // In‑memory store of latest data
+          var agentsData = {};
 
-           function updateAgentTable(data) {
-        var tbody = $('#agentStatusTable');
-        tbody.empty();
-        var now = new Date();
-        $.each(data, function(index, agent) {
-            // Convert the agent's timestamp into a Date object.
-            var agentTimestamp = new Date(agent.timestamp);
-            // Determine if the agent is online (last update within 60 seconds).
-            var diffSec = (now - agentTimestamp) / 1000;
-            var status = diffSec < 60 ? 'Online' : 'Offline';
-            var color = diffSec < 60 ? 'green' : 'red';
-
-            // Format the date to European format with day first.
-            var formattedTimestamp = agentTimestamp.toLocaleString("en-GB", {
-                day: '2-digit',
-                month: '2-digit',
-                year: 'numeric',
-                hour: '2-digit',
-                minute: '2-digit',
-                second: '2-digit'
+          // 1) Update the dashboard table
+          function updateAgentTable(data) {
+            var now = new Date();
+            var $tbody = $('#agentStatusTable').empty();
+            data.forEach(function(agent) {
+              var ts     = new Date(agent.timestamp);
+              var diff   = (now - ts) / 1000;
+              var online = diff < 60;
+              var color  = online ? 'success' : 'danger';
+              var fmt    = ts.toLocaleString('en-GB',{
+                              day:'2-digit',month:'2-digit',year:'numeric',
+                              hour:'2-digit',minute:'2-digit',second:'2-digit'
+                            });
+              $tbody.append(
+                '<tr>' +
+                  '<td>' + agent.machineName + '</td>' +
+                  '<td class="fw-bold text-' + color + '">' +
+                    (online ? 'Online' : 'Offline') +
+                  '</td>' +
+                  '<td>' + fmt + '</td>' +
+                '</tr>'
+              );
+              // cache for later
+              agentsData[agent.agentId] = agent;
             });
+          }
 
-            var row = `<tr>
-                <td>${agent.agentId}</td>
-                <td style="color: ${color}; font-weight: bold;">${status}</td>
-                <td>${formattedTimestamp}</td>
-            </tr>`;
-            tbody.append(row);
-            // Save the agent data for later use.
-            agentsData[agent.agentId] = agent;
-        });
-        }
+          // 2) Populate the agent dropdown
+          function populateAgentDropdown(data) {
+            var $sel = $('#agentSelect').empty()
+                        .append('<option value="">-- Select an Agent --</option>');
+            data.forEach(function(agent) {
+              $('<option>')
+                .val(agent.agentId)
+                .text(agent.machineName + ' (' + agent.agentId.substr(0,8) + ')')
+                .appendTo($sel);
+            });
+          }
 
-        function populateAgentDropdown(data) {
-          var select = $('#agentSelect').empty()
-            .append('<option value="">-- Select an Agent --</option>');
-
-          data.forEach(function(agent) {
-            select.append(`<option value="${agent.agentId}">${agent.agentId}</option>`);
+          // 3) When an agent is picked, show its printers
+          $('#agentSelect').on('change', function() {
+            var id   = $(this).val();
+            var list = agentsData[id] ? agentsData[id].printers : [];
+            var $b   = $('#printerTableBody').empty();
+            list.forEach(function(p) {
+              var bg = p.status === 'Online' ? 'bg-success' : 'bg-danger';
+              $b.append(
+                '<tr>' +
+                  '<td>' + p.name + '</td>' +
+                  '<td class="' + bg + ' text-white">' + p.status + '</td>' +
+                '</tr>'
+              );
+            });
           });
-        }
 
-        // When you pick an agent, show its printers
-        $('#agentSelect').on('change', function() {
-          var agentId = $(this).val();
-          var body = $('#printerTableBody').empty();
+          // 4) Fetch & refresh every 10s
+          function loadAgentData() {
+            $.getJSON('/api/printerdata', function(data) {
+              updateAgentTable(data);
+              populateAgentDropdown(data);
+            });
+          }
 
-          if (!agentId || !agentsData[agentId]) return;
-
-          agentsData[agentId].printers.forEach(function(p) {
-            // background color
-            var bgClass = p.status === 'Online' ? 'bg-success'
-                         : 'bg-danger';
-            body.append(`
-              <tr>
-                <td>${p.name}</td>
-                <td class="${bgClass} text-white">${p.status}</td>
-              </tr>`);
-          });
-        });
-
-        function loadAgentData() {
-          $.getJSON('/api/printerdata', function(data) {
-            updateAgentTable(data);
-            populateAgentDropdown(data);
-          });
-        }
-
-        $(document).ready(function() {
           loadAgentData();
-          setInterval(loadAgentData, 10000); // every 10s
+          setInterval(loadAgentData, 10000);
         });
     </script>
 }
+

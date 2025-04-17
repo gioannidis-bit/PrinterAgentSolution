@@ -17,6 +17,7 @@ namespace PrinterAgent.WebUI.Controllers
     public class AgentData
     {
         public string AgentId { get; set; }
+        public string MachineName { get; set; }   // new!
         public DateTime Timestamp { get; set; }
         public List<PrinterInfo> Printers { get; set; }
     }

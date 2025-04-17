@@ -7,10 +7,9 @@ namespace PrinterAgent.WebUI.Hubs
     public class PrintHub : Hub
     {
         // Called by agents on connect, passing their AgentId
-        public Task RegisterAgent(string agentId)
+        public Task RegisterAgent(string agentId, string machineName)
         {
-            // Map this ConnectionId → agentId
-            AgentConnectionMap.Register(agentId, Context.ConnectionId);
+            AgentConnectionMap.Register(agentId, Context.ConnectionId, machineName);
             return Task.CompletedTask;
         }
     }
