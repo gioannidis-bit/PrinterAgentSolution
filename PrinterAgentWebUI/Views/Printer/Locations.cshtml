@@ -1,0 +1,207 @@
+﻿@model IEnumerable<PrinterAgent.WebUI.Controllers.AgentData>
+@{
+    ViewBag.Title = "Agent Locations";
+}
+
+<div class="container-fluid mt-4">
+    <h2>Agent Locations Management</h2>
+    <p class="lead">Διαχειριστείτε τις τοποθεσίες των συνδεδεμένων agents</p>
+
+    <div class="card mt-4">
+        <div class="card-header bg-primary text-white">
+            <h5 class="mb-0">Agents</h5>
+        </div>
+        <div class="card-body">
+            <div class="table-responsive">
+                <table class="table table-hover">
+                    <thead>
+                        <tr>
+                            <th>Agent Name</th>
+                            <th>Agent ID</th>
+                            <th>Location</th>
+                            <th>Status</th>
+                            <th>Last Update</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody id="agentsTable">
+                        @foreach (var agent in Model)
+                        {
+                            <tr data-agent-id="@agent.AgentId">
+                                <td>@agent.MachineName</td>
+                                <td><small class="text-muted">@agent.AgentId</small></td>
+                                <td class="location-value">@(string.IsNullOrEmpty(agent.Location) ? "-" : agent.Location)</td>
+                                <td>
+                                    @if (agent.IsOnline)
+                                    {
+                                        <span class="badge bg-success">Online</span>
+                                    }
+                                    else
+                                    {
+                                        <span class="badge bg-danger">Offline</span>
+                                    }
+                                </td>
+                                <td>@agent.Timestamp.ToLocalTime().ToString("g")</td>
+                                <td>
+                                    <button class="btn btn-sm btn-outline-primary edit-location-btn">
+                                        <i class="bi bi-pencil"></i> Edit
+                                    </button>
+                                </td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Μodal για επεξεργασία τοποθεσίας -->
+<div class="modal fade" id="editLocationModal" tabindex="-1" aria-labelledby="editLocationModalLabel" aria-hidden="true">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="editLocationModalLabel">Edit Agent Location</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+                <form id="editLocationForm">
+                    <input type="hidden" id="editAgentId" />
+                    <div class="mb-3">
+                        <label for="editAgentName" class="form-label">Agent Name</label>
+                        <input type="text" class="form-control" id="editAgentName" readonly />
+                    </div>
+                    <div class="mb-3">
+                        <label for="editLocation" class="form-label">Location</label>
+                        <input type="text" class="form-control" id="editLocation" placeholder="Enter location..." required />
+                    </div>
+                </form>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                <button type="button" class="btn btn-primary" id="saveLocationBtn">Save</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+@section Scripts {
+    <script>
+        $(function() {
+            // Επεξεργασία τοποθεσίας
+            $('.edit-location-btn').click(function() {
+                var row = $(this).closest('tr');
+                var agentId = row.data('agent-id');
+                var agentName = row.find('td:first').text();
+                var location = row.find('.location-value').text();
+
+                // Αν η τοποθεσία είναι "-", την αντικαθιστούμε με κενό
+                if (location === "-") {
+                    location = "";
+                }
+
+                // Συμπληρώνουμε τα στοιχεία στο modal
+                $('#editAgentId').val(agentId);
+                $('#editAgentName').val(agentName);
+                $('#editLocation').val(location);
+
+                // Εμφανίζουμε το modal
+                var modal = new bootstrap.Modal(document.getElementById('editLocationModal'));
+                modal.show();
+            });
+
+            // Αποθήκευση της νέας τοποθεσίας
+            $('#saveLocationBtn').click(function() {
+                var agentId = $('#editAgentId').val();
+                var location = $('#editLocation').val();
+
+                // Έλεγχος εγκυρότητας
+                if (!location.trim()) {
+                    alert('Please enter a location');
+                    return;
+                }
+
+                // Αποστολή της ενημέρωσης στον server
+                $.ajax({
+                    url: '@Url.Action("UpdateLocation", "Printer")',
+                    type: 'POST',
+                    data: {
+                        agentId: agentId,
+                        location: location
+                    },
+                    success: function(response) {
+                        if (response.success) {
+                            // Ενημερώνουμε την τιμή στον πίνακα
+                            $('tr[data-agent-id="' + agentId + '"] .location-value').text(location);
+
+                            // Κλείνουμε το modal
+                            $('#editLocationModal').modal('hide');
+                        } else {
+                            alert('Error: ' + response.message);
+                        }
+                    },
+                    error: function() {
+                        alert('An error occurred while updating the location');
+                    }
+                });
+            });
+
+            // Περιοδική ανανέωση της λίστας
+            function refreshAgents() {
+                $.getJSON('/api/printerdata', function(data) {
+                    // Ενημερώνουμε τον πίνακα χωρίς να χάσουμε τις υπάρχουσες τοποθεσίες
+                    var table = $('#agentsTable');
+                    table.empty();
+
+                    data.forEach(function(agent) {
+                        var statusBadge = agent.isOnline
+                            ? '<span class="badge bg-success">Online</span>'
+                            : '<span class="badge bg-danger">Offline</span>';
+
+                        var location = agent.location || "-";
+                        var timestamp = new Date(agent.timestamp).toLocaleString();
+
+                        var row = `
+                            <tr data-agent-id="${agent.agentId}">
+                                <td>${agent.machineName}</td>
+                                <td><small class="text-muted">${agent.agentId}</small></td>
+                                <td class="location-value">${location}</td>
+                                <td>${statusBadge}</td>
+                                <td>${timestamp}</td>
+                                <td>
+                                    <button class="btn btn-sm btn-outline-primary edit-location-btn">
+                                        <i class="bi bi-pencil"></i> Edit
+                                    </button>
+                                </td>
+                            </tr>
+                        `;
+
+                        table.append(row);
+                    });
+
+                    // Επανασύνδεση των event handlers
+                    $('.edit-location-btn').click(function() {
+                        var row = $(this).closest('tr');
+                        var agentId = row.data('agent-id');
+                        var agentName = row.find('td:first').text();
+                        var location = row.find('.location-value').text();
+
+                        if (location === "-") {
+                            location = "";
+                        }
+
+                        $('#editAgentId').val(agentId);
+                        $('#editAgentName').val(agentName);
+                        $('#editLocation').val(location);
+
+                        var modal = new bootstrap.Modal(document.getElementById('editLocationModal'));
+                        modal.show();
+                    });
+                });
+            }
+
+            // Ανανέωση κάθε 30 δευτερόλεπτα
+            setInterval(refreshAgents, 30000);
+        });
+    </script>
+}

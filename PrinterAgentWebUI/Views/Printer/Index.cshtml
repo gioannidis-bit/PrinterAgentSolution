@@ -6,113 +6,234 @@
 
 <h2>Dashboard</h2>
 
-<table class="table table-bordered">
-    <thead>
-        <tr>
-            <th>Agent ID</th>
-            <th>Status</th>
-            <th>Last Update (UTC)</th>
-        </tr>
-    </thead>
-    <tbody id="agentStatusTable">
-        <!-- Populated by JS -->
-    </tbody>
-</table>
-
-<hr />
-
-<h3>Printer Status by Agent</h3>
-<div class="mb-3">
-    <label for="agentSelect" class="form-label">Choose Agent</label>
-    <select id="agentSelect" class="form-select">
-        <option value="">-- Select an Agent --</option>
-    </select>
+<div class="card mb-4">
+    <div class="card-header bg-primary text-white">
+        <h4 class="mb-0">Συνδεδεμένοι Agents</h4>
+    </div>
+    <div class="card-body">
+        <table class="table table-striped">
+            <thead>
+                <tr>
+                    <th>Agent</th>
+                    <th>Τοποθεσία</th>
+                    <th>Κατάσταση</th>
+                    <th>Τελευταία Επαφή (UTC)</th>
+                </tr>
+            </thead>
+            <tbody id="agentStatusTable">
+                <!-- Θα συμπληρωθεί από το JavaScript -->
+            </tbody>
+        </table>
+    </div>
 </div>
 
-<table class="table">
-    <thead>
-        <tr>
-            <th>Printer Name</th>
-            <th>Status</th>
-        </tr>
-    </thead>
-    <tbody id="printerTableBody">
-        <!-- Populated by JS -->
-    </tbody>
-</table>
+<div class="card">
+    <div class="card-header bg-primary text-white">
+        <h4 class="mb-0">Διαθέσιμοι Εκτυπωτές</h4>
+    </div>
+    <div class="card-body">
+        <div class="mb-3">
+            <label for="agentSelect" class="form-label">Επιλογή Agent</label>
+            <select id="agentSelect" class="form-select">
+                <option value="">-- Όλοι οι agents --</option>
+                <!-- Θα συμπληρωθεί από το JavaScript -->
+            </select>
+            <small class="form-text text-muted">Μόνο οι online agents εμφανίζονται στη λίστα.</small>
+        </div>
+
+        <table class="table table-hover">
+            <thead>
+                <tr>
+                    <th>Agent</th>
+                    <th>Τοποθεσία</th>
+                    <th>Εκτυπωτής</th>
+                    <th>Κατάσταση</th>
+                    <th>Ενέργειες</th>
+                </tr>
+            </thead>
+            <tbody id="printerTableBody">
+                <!-- Θα συμπληρωθεί από το JavaScript -->
+            </tbody>
+        </table>
+    </div>
+</div>
 
 @section Scripts {
     <script>
         $(function() {
-          // In‑memory store of latest data
-          var agentsData = {};
+            // In-memory store of latest data
+            var agentsData = {};
+            var allPrinters = [];
 
-          // 1) Update the dashboard table
-          function updateAgentTable(data) {
-            var now = new Date();
-            var $tbody = $('#agentStatusTable').empty();
-            data.forEach(function(agent) {
-              var ts     = new Date(agent.timestamp);
-              var diff   = (now - ts) / 1000;
-              var online = diff < 60;
-              var color  = online ? 'success' : 'danger';
-              var fmt    = ts.toLocaleString('en-GB',{
-                              day:'2-digit',month:'2-digit',year:'numeric',
-                              hour:'2-digit',minute:'2-digit',second:'2-digit'
+            // 1) Update the dashboard table
+            function updateAgentTable(data) {
+                var now = new Date();
+                var $tbody = $('#agentStatusTable').empty();
+
+                // Ταξινόμηση με βάση την κατάσταση (online πρώτα) και μετά με όνομα
+                data.sort(function(a, b) {
+                    if (a.isOnline !== b.isOnline) {
+                        return a.isOnline ? -1 : 1;
+                    }
+                    return a.machineName.localeCompare(b.machineName);
+                });
+
+                data.forEach(function(agent) {
+                    var ts = new Date(agent.timestamp);
+                    var diff = (now - ts) / 1000;
+                    var online = agent.isOnline && diff < 60;
+                    var color = online ? 'success' : 'danger';
+                    var fmt = ts.toLocaleString('en-GB', {
+                        day: '2-digit', month: '2-digit', year: 'numeric',
+                        hour: '2-digit', minute: '2-digit', second: '2-digit'
+                    });
+
+                    $tbody.append(
+                        '<tr>' +
+                            '<td>' + agent.machineName + '</td>' +
+                            '<td>' + (agent.location || '-') + '</td>' +
+                            '<td class="fw-bold text-' + color + '">' +
+                                (online ? 'Online' : 'Offline') +
+                            '</td>' +
+                            '<td>' + fmt + '</td>' +
+                        '</tr>'
+                    );
+
+                    // cache for later
+                    agentsData[agent.agentId] = agent;
+                });
+            }
+
+            // 2) Populate the agent dropdown
+            function populateAgentDropdown(data) {
+                var $sel = $('#agentSelect').empty()
+                    .append('<option value="">-- Όλοι οι agents --</option>');
+
+                // Φιλτράρουμε μόνο τους online agents
+                var onlineAgents = data.filter(function(agent) {
+                    return agent.isOnline;
+                });
+
+                onlineAgents.forEach(function(agent) {
+                    var locationText = agent.location ? ' (' + agent.location + ')' : '';
+                    $('<option>')
+                        .val(agent.agentId)
+                        .text(agent.machineName + locationText)
+                        .appendTo($sel);
+                });
+            }
+
+            // 3) Update the printer table
+            function updatePrinterTable(printers, filteredAgentId) {
+                var $tbody = $('#printerTableBody').empty();
+
+                // Φιλτράρουμε με βάση τον επιλεγμένο agent αν υπάρχει
+                var filteredPrinters = printers;
+                if (filteredAgentId) {
+                    filteredPrinters = printers.filter(function(p) {
+                        return p.agentId === filteredAgentId;
+                    });
+                }
+
+                if (filteredPrinters.length === 0) {
+                    $tbody.append(
+                        '<tr>' +
+                            '<td colspan="5" class="text-center">Δεν βρέθηκαν εκτυπωτές</td>' +
+                        '</tr>'
+                    );
+                    return;
+                }
+
+                // Ταξινόμηση με βάση το όνομα του agent και του εκτυπωτή
+                filteredPrinters.sort(function(a, b) {
+                    if (a.agentName !== b.agentName) {
+                        return a.agentName.localeCompare(b.agentName);
+                    }
+                    return a.printerName.localeCompare(b.printerName);
+                });
+
+                filteredPrinters.forEach(function(printer) {
+                    var statusBadge, statusClass, statusText;
+
+                    if (!printer.agentIsOnline) {
+                        statusClass = 'secondary';
+                        statusText = 'Agent Offline';
+                    } else if (printer.printerStatus === 'Online') {
+                        statusClass = 'success';
+                        statusText = 'Online';
+                    } else if (printer.printerStatus === 'Offline') {
+                        statusClass = 'warning text-dark';
+                        statusText = 'Offline';
+                    } else {
+                        statusClass = 'info text-dark';
+                        statusText = printer.printerStatus;
+                    }
+
+                    statusBadge = '<span class="badge bg-' + statusClass + '">' + statusText + '</span>';
+
+                    // Button για εκτύπωση, απενεργοποιημένο αν ο agent είναι offline
+                    var printButton = '';
+                    if (printer.agentIsOnline) {
+                        var printUrl = '/Printer/TestPrint?agentId=' + printer.agentId + '&printerName=' + encodeURIComponent(printer.printerName);
+                        printButton = '<a href="' + printUrl + '" class="btn btn-sm btn-primary">Εκτύπωση</a>';
+                    } else {
+                        printButton = '<button class="btn btn-sm btn-primary" disabled>Εκτύπωση</button>';
+                    }
+
+                    // Κάνουμε το όνομα του εκτυπωτή link για εκτύπωση
+                    var printerLink = printer.agentIsOnline
+                        ? '<a href="/Printer/TestPrint?agentId=' + printer.agentId + '&printerName=' + encodeURIComponent(printer.printerName) + '">' + printer.printerName + '</a>'
+                        : printer.printerName;
+
+                    $tbody.append(
+                        '<tr>' +
+                            '<td>' + printer.agentName + '</td>' +
+                            '<td>' + (printer.agentLocation || '-') + '</td>' +
+                            '<td>' + printerLink + '</td>' +
+                            '<td>' + statusBadge + '</td>' +
+                            '<td>' + printButton + '</td>' +
+                        '</tr>'
+                    );
+                });
+            }
+
+            // 4) When agent is selected, filter printers
+            $('#agentSelect').on('change', function() {
+                var agentId = $(this).val();
+                updatePrinterTable(allPrinters, agentId);
+            });
+
+            // 5) Fetch & refresh every 10s
+            function loadAgentData() {
+                $.getJSON('/api/printerdata', function(data) {
+                    updateAgentTable(data);
+                    populateAgentDropdown(data);
+
+                    // Build printer list from all agents
+                    allPrinters = [];
+                    data.forEach(function(agent) {
+                        if (agent.printers) {
+                            agent.printers.forEach(function(printer) {
+                                allPrinters.push({
+                                    agentId: agent.agentId,
+                                    agentName: agent.machineName,
+                                    agentLocation: agent.location,
+                                    printerName: printer.name,
+                                    printerStatus: printer.status,
+                                    agentIsOnline: agent.isOnline
+                                });
                             });
-              $tbody.append(
-                '<tr>' +
-                  '<td>' + agent.machineName + '</td>' +
-                  '<td class="fw-bold text-' + color + '">' +
-                    (online ? 'Online' : 'Offline') +
-                  '</td>' +
-                  '<td>' + fmt + '</td>' +
-                '</tr>'
-              );
-              // cache for later
-              agentsData[agent.agentId] = agent;
-            });
-          }
+                        }
+                    });
 
-          // 2) Populate the agent dropdown
-          function populateAgentDropdown(data) {
-            var $sel = $('#agentSelect').empty()
-                        .append('<option value="">-- Select an Agent --</option>');
-            data.forEach(function(agent) {
-              $('<option>')
-                .val(agent.agentId)
-                .text(agent.machineName + ' (' + agent.agentId.substr(0,8) + ')')
-                .appendTo($sel);
-            });
-          }
+                    // Update printer table, preserving any filter
+                    var selectedAgentId = $('#agentSelect').val();
+                    updatePrinterTable(allPrinters, selectedAgentId);
+                });
+            }
 
-          // 3) When an agent is picked, show its printers
-          $('#agentSelect').on('change', function() {
-            var id   = $(this).val();
-            var list = agentsData[id] ? agentsData[id].printers : [];
-            var $b   = $('#printerTableBody').empty();
-            list.forEach(function(p) {
-              var bg = p.status === 'Online' ? 'bg-success' : 'bg-danger';
-              $b.append(
-                '<tr>' +
-                  '<td>' + p.name + '</td>' +
-                  '<td class="' + bg + ' text-white">' + p.status + '</td>' +
-                '</tr>'
-              );
-            });
-          });
-
-          // 4) Fetch & refresh every 10s
-          function loadAgentData() {
-            $.getJSON('/api/printerdata', function(data) {
-              updateAgentTable(data);
-              populateAgentDropdown(data);
-            });
-          }
-
-          loadAgentData();
-          setInterval(loadAgentData, 10000);
+            loadAgentData();
+            setInterval(loadAgentData, 10000);
         });
     </script>
 }
-

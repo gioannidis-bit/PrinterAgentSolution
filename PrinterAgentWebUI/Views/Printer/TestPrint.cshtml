@@ -1,5 +1,7 @@
 ﻿@{
     ViewBag.Title = "Send Test Print";
+    var selectedAgentId = ViewBag.SelectedAgentId ?? "";
+    var selectedPrinterName = ViewBag.SelectedPrinterName ?? "";
 }
 
 <hr />
@@ -12,13 +14,28 @@
         <label for="agentId" class="form-label">Select Agent</label>
         <select id="agentId" name="agentId" class="form-select" required>
             <option value="">-- Select Agent --</option>
+            @if (ViewBag.Agents != null)
+            {
+                foreach (var agent in ViewBag.Agents)
+                {
+                    var displayText = agent.MachineName;
+                    if (!string.IsNullOrEmpty(agent.Location))
+                    {
+                        displayText += " (" + agent.Location + ")";
+                    }
+                    var selected = agent.AgentId == selectedAgentId ? "selected" : "";
+                    <option value="@agent.AgentId" @selected>@displayText</option>
+                }
+            }
         </select>
+        <small class="form-text text-muted">Μόνο οι online agents εμφανίζονται στη λίστα.</small>
     </div>
 
     <div class="mb-3">
         <label for="printerName" class="form-label">Select Printer</label>
         <select id="printerName" name="printerName" class="form-select" required>
             <option value="">-- Select Printer --</option>
+            <!-- Θα συμπληρωθεί δυναμικά μέσω JavaScript -->
         </select>
     </div>
 
@@ -47,48 +64,71 @@
 
 @if (ViewBag.Message != null)
 {
-    <div class="alert alert-info mt-3">
+    <div class="alert alert-@(ViewBag.MessageType ?? "info") mt-3">
         <strong>@ViewBag.Message</strong>
     </div>
 }
 
 @section Scripts {
-      <script>
+    <script>
         $(function() {
-          var agentsData = {};
+            var printersByAgent = {};
 
-          // 1) Load agents & fill the Agent dropdown
-          function loadAgentData() {
-            $.getJSON('/api/printerdata', function(data) {
-              agentsData = {};
-              var $a = $('#agentId').empty()
-                        .append('<option value="">-- Select Agent --</option>');
-              data.forEach(function(agent) {
-                agentsData[agent.agentId] = agent;
-                $('<option>')
-                  .val(agent.agentId)
-                  .text(agent.machineName + ' (' + agent.agentId.substr(0,8) + ')')
-                  .appendTo($a);
-              });
+            // 1) Load all available printers
+            function loadPrinterData() {
+                $.getJSON('/api/printerdata', function(agents) {
+                    printersByAgent = {};
+                    
+                    agents.forEach(function(agent) {
+                        if (agent.isOnline && agent.printers) {
+                            printersByAgent[agent.agentId] = agent.printers;
+                        }
+                    });
+                    
+                    // Αν έχει επιλεγεί ήδη agent, φορτώνουμε τους εκτυπωτές του
+                    updatePrinters($('#agentId').val());
+                });
+            }
+
+            // 2) Update printer dropdown when agent changes
+            function updatePrinters(agentId) {
+                var printers = printersByAgent[agentId] || [];
+                var $printerSelect = $('#printerName').empty()
+                    .append('<option value="">-- Select Printer --</option>');
+                
+                printers.forEach(function(printer) {
+                    var isSelected = printer.name === '@selectedPrinterName';
+                    var statusText = printer.status === 'Online' ? ' (Online)' : ' (Offline)';
+                    var optionText = printer.name + statusText;
+                    
+                    $('<option>')
+                        .val(printer.name)
+                        .text(optionText)
+                        .prop('selected', isSelected)
+                        .appendTo($printerSelect);
+                });
+            }
+
+            // 3) When agent changes, update printers
+            $('#agentId').on('change', function() {
+                updatePrinters(this.value);
             });
-          }
 
-          // 2) When agent changes, fill printers
-          $('#agentId').on('change', function() {
-            var list = agentsData[this.value]
-                       ? agentsData[this.value].printers
-                       : [];
-            var $p = $('#printerName').empty()
-                      .append('<option value="">-- Select Printer --</option>');
-            list.forEach(function(p) {
-              $('<option>')
-                .val(p.name)
-                .text(p.name)
-                .appendTo($p);
-            });
-          });
-
-          loadAgentData();
+            // 4) Initial load
+            loadPrinterData();
+            
+            // 5) Set initial values if provided
+            if ('@selectedAgentId' !== '') {
+                $('#agentId').val('@selectedAgentId');
+                
+                // Περιμένουμε λίγο για να φορτωθούν τα δεδομένα πριν επιλέξουμε τον εκτυπωτή
+                setTimeout(function() {
+                    updatePrinters('@selectedAgentId');
+                    if ('@selectedPrinterName' !== '') {
+                        $('#printerName').val('@selectedPrinterName');
+                    }
+                }, 500);
+            }
         });
-      </script>
+    </script>
 }
