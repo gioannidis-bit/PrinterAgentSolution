@@ -6,6 +6,8 @@ using System.Runtime.InteropServices;
 using System.Windows.Forms;
 using System.Runtime.Versioning;
 using System.Printing;
+using System.Net.NetworkInformation;
+using System.Text.RegularExpressions;
 
 namespace PrinterAgent.Core
 {
@@ -37,9 +39,9 @@ namespace PrinterAgent.Core
         {
             var server = new LocalPrintServer();
             var queues = server.GetPrintQueues(new[] {
-        EnumeratedPrintQueueTypes.Local,
-        EnumeratedPrintQueueTypes.Connections
-    });
+                EnumeratedPrintQueueTypes.Local,
+                EnumeratedPrintQueueTypes.Connections
+            });
             var list = new List<PrinterInfo>();
             foreach (var pq in queues)
             {
@@ -55,13 +57,116 @@ namespace PrinterAgent.Core
                 else
                     status = "Online";
 
+                // Λήψη πληροφοριών driver
+                string driverName = "Unknown";
+                try
+                {
+                    if (pq.QueueDriver != null && !string.IsNullOrEmpty(pq.QueueDriver.Name))
+                    {
+                        driverName = pq.QueueDriver.Name;
+                    }
+                }
+                catch
+                {
+                    // Αγνοούμε τυχόν σφάλματα
+                }
+
+                // Λήψη IP και ping test
+                string ipAddress = "Not Available";
+                int responseTime = -1; // Χρήση -1 αντί για null για να δείξουμε ότι δεν έχουμε τιμή
+
+                try
+                {
+                    // Προσπάθεια εξαγωγής IP από το port name
+                    string portName = pq.QueuePort?.Name ?? "";
+                    Console.WriteLine($"Printer: {pq.Name}, Port: {portName}"); // Debug logging
+
+                    // Handle format: "IP_192.168.1.1"
+                    if (portName.StartsWith("IP_"))
+                    {
+                        ipAddress = portName.Substring(3);
+                        // Try ping
+                        PingIPAddress(ipAddress, ref responseTime);
+                    }
+                    // Handle format: "192.168.1.1"
+                    else if (System.Net.IPAddress.TryParse(portName, out _))
+                    {
+                        ipAddress = portName;
+                        // Try ping
+                        PingIPAddress(ipAddress, ref responseTime);
+                    }
+                    // Handle format: "192.168.14.16_ip" or similar IP formats with suffix
+                    else if (portName.Contains(".") && portName.Split('.').Length == 4)
+                    {
+                        // Try to extract IP pattern from port name
+                        var ipPattern = @"(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})";
+                        var match = Regex.Match(portName, ipPattern);
+                        if (match.Success && System.Net.IPAddress.TryParse(match.Groups[1].Value, out _))
+                        {
+                            ipAddress = match.Groups[1].Value;
+                            Console.WriteLine($"Extracted IP {ipAddress} from port {portName}"); // Debug
+
+                            // Try ping
+                            PingIPAddress(ipAddress, ref responseTime);
+                        }
+                    }
+                    // Additional check for TCP/IP in the port name
+                    else if (portName.Contains("TCP") || portName.Contains("IP"))
+                    {
+                        // Check if there's anything that looks like an IP in the name
+                        var ipPattern = @"(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})";
+                        var match = Regex.Match(portName, ipPattern);
+                        if (match.Success && System.Net.IPAddress.TryParse(match.Groups[1].Value, out _))
+                        {
+                            ipAddress = match.Groups[1].Value;
+                            Console.WriteLine($"Extracted IP {ipAddress} from TCP/IP port {portName}"); // Debug
+
+                            // Try ping
+                            PingIPAddress(ipAddress, ref responseTime);
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    // Log exception but continue
+                    Console.WriteLine($"Error extracting IP: {ex.Message}");
+                }
+
                 list.Add(new PrinterInfo
                 {
                     Name = pq.Name,
-                    Status = status
+                    Status = status,
+                    DriverName = driverName,
+                    IPAddress = ipAddress,
+                    ResponseTime = responseTime
                 });
             }
             return list;
+        }
+
+        private static void PingIPAddress(string ipAddress, ref int responseTime)
+        {
+            try
+            {
+                using (var ping = new System.Net.NetworkInformation.Ping())
+                {
+                    var reply = ping.Send(ipAddress, 1000); // 1s timeout
+                    if (reply.Status == System.Net.NetworkInformation.IPStatus.Success)
+                    {
+                        responseTime = (int)reply.RoundtripTime;
+                        Console.WriteLine($"Successful ping to {ipAddress}: {responseTime}ms"); // Debug
+                    }
+                    else
+                    {
+                        Console.WriteLine($"Failed ping to {ipAddress}: {reply.Status}"); // Debug
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                // Αγνοούμε σφάλματα ping
+                Console.WriteLine($"Ping error for {ipAddress}: {ex.Message}"); // Debug
+            }
         }
 
         /// <summary>

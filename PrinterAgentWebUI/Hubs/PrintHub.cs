@@ -224,7 +224,10 @@ namespace PrinterAgent.WebUI.Hubs
                         AgentLocation = agent.Location ?? "",
                         PrinterName = printer.Name,
                         PrinterStatus = printer.Status,
-                        AgentIsOnline = agent.IsOnline
+                        AgentIsOnline = agent.IsOnline,
+                        DriverName = printer.DriverName,
+                        IPAddress = printer.IPAddress,
+                        ResponseTime = printer.ResponseTime
                     });
                 }
             }
@@ -255,13 +258,16 @@ namespace PrinterAgent.WebUI.Hubs
         public DateTime LastSeen { get; set; }
     }
 
-    public class PrinterStatusDto
-    {
-        public string AgentId { get; set; }
-        public string AgentName { get; set; }
-        public string AgentLocation { get; set; }
-        public string PrinterName { get; set; }
-        public string PrinterStatus { get; set; }
-        public bool AgentIsOnline { get; set; }
-    }
+  public class PrinterStatusDto
+{
+    public string AgentId { get; set; }
+    public string AgentName { get; set; }
+    public string AgentLocation { get; set; }
+    public string PrinterName { get; set; }
+    public string PrinterStatus { get; set; }
+    public bool AgentIsOnline { get; set; }
+    public string DriverName { get; set; } = "Unknown";
+    public string IPAddress { get; set; } = "Not Available";
+    public int ResponseTime { get; set; } = -1;
+}
 }

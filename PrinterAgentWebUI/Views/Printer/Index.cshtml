@@ -60,7 +60,15 @@
 
 @section Scripts {
     <script>
-        $(function() {
+              $(function() {
+            // Initialize tooltips
+            var tooltipTriggerList = [].slice.call(document.querySelectorAll('[data-bs-toggle="tooltip"]'));
+            tooltipTriggerList.forEach(function(tooltipTriggerEl) {
+                new bootstrap.Tooltip(tooltipTriggerEl, {
+                    html: true
+                });
+            });
+
             // In-memory store of latest data
             var agentsData = {};
             var allPrinters = [];
@@ -70,18 +78,37 @@
                 var now = new Date();
                 var $tbody = $('#agentStatusTable').empty();
 
+                // Ensure data is an array before sorting
+                if (!Array.isArray(data)) {
+                    console.error("Expected array of agents but got:", data);
+                    return;
+                }
+
                 // Ταξινόμηση με βάση την κατάσταση (online πρώτα) και μετά με όνομα
                 data.sort(function(a, b) {
-                    if (a.isOnline !== b.isOnline) {
-                        return a.isOnline ? -1 : 1;
+                    // Normalize property names (API might return camelCase or PascalCase)
+                    var aOnline = a.isOnline !== undefined ? a.isOnline : a.IsOnline;
+                    var bOnline = b.isOnline !== undefined ? b.isOnline : b.IsOnline;
+                    var aMachine = a.machineName !== undefined ? a.machineName : a.MachineName;
+                    var bMachine = b.machineName !== undefined ? b.machineName : b.MachineName;
+
+                    if (aOnline !== bOnline) {
+                        return aOnline ? -1 : 1;
                     }
-                    return a.machineName.localeCompare(b.machineName);
+                    return aMachine.localeCompare(bMachine);
                 });
 
                 data.forEach(function(agent) {
-                    var ts = new Date(agent.timestamp);
+                    // Normalize property names
+                    var agentId = agent.agentId !== undefined ? agent.agentId : agent.AgentId;
+                    var machineName = agent.machineName !== undefined ? agent.machineName : agent.MachineName;
+                    var location = agent.location !== undefined ? agent.location : agent.Location;
+                    var isOnline = agent.isOnline !== undefined ? agent.isOnline : agent.IsOnline;
+                    var timestamp = agent.timestamp !== undefined ? agent.timestamp : agent.Timestamp;
+
+                    var ts = new Date(timestamp);
                     var diff = (now - ts) / 1000;
-                    var online = agent.isOnline && diff < 60;
+                    var online = isOnline && diff < 60;
                     var color = online ? 'success' : 'danger';
                     var fmt = ts.toLocaleString('en-GB', {
                         day: '2-digit', month: '2-digit', year: 'numeric',
@@ -90,8 +117,8 @@
 
                     $tbody.append(
                         '<tr>' +
-                            '<td>' + agent.machineName + '</td>' +
-                            '<td>' + (agent.location || '-') + '</td>' +
+                            '<td>' + machineName + '</td>' +
+                            '<td>' + (location || '-') + '</td>' +
                             '<td class="fw-bold text-' + color + '">' +
                                 (online ? 'Online' : 'Offline') +
                             '</td>' +
@@ -100,7 +127,7 @@
                     );
 
                     // cache for later
-                    agentsData[agent.agentId] = agent;
+                    agentsData[agentId] = agent;
                 });
             }
 
@@ -111,14 +138,18 @@
 
                 // Φιλτράρουμε μόνο τους online agents
                 var onlineAgents = data.filter(function(agent) {
-                    return agent.isOnline;
+                    return agent.isOnline !== undefined ? agent.isOnline : agent.IsOnline;
                 });
 
                 onlineAgents.forEach(function(agent) {
-                    var locationText = agent.location ? ' (' + agent.location + ')' : '';
+                    var agentId = agent.agentId !== undefined ? agent.agentId : agent.AgentId;
+                    var machineName = agent.machineName !== undefined ? agent.machineName : agent.MachineName;
+                    var location = agent.location !== undefined ? agent.location : agent.Location;
+
+                    var locationText = location ? ' (' + location + ')' : '';
                     $('<option>')
-                        .val(agent.agentId)
-                        .text(agent.machineName + locationText)
+                        .val(agentId)
+                        .text(machineName + locationText)
                         .appendTo($sel);
                 });
             }
@@ -180,10 +211,26 @@
                         printButton = '<button class="btn btn-sm btn-primary" disabled>Εκτύπωση</button>';
                     }
 
+                    // Προσθήκη info tooltip
+                    var infoTooltip = '';
+                    var driverInfo = printer.driverName || 'Unknown';
+                    var ipInfo = printer.ipAddress || 'Not Available';
+                    var responseInfo = printer.responseTime > 0 ? printer.responseTime + ' ms' : 'Not available';
+
+                    var tooltipContent = '<strong>Driver:</strong> ' + driverInfo + '<br>';
+                    tooltipContent += '<strong>IP:</strong> ' + ipInfo + '<br>';
+                    if (printer.responseTime > 0) {
+                        tooltipContent += '<strong>Response:</strong> ' + responseInfo;
+                    }
+
+                    var infoIcon = ' <i class="bi bi-info-circle-fill text-primary" data-bs-toggle="tooltip" data-bs-html="true" ' +
+                                'title="' + tooltipContent + '"></i>';
+
                     // Κάνουμε το όνομα του εκτυπωτή link για εκτύπωση
                     var printerLink = printer.agentIsOnline
-                        ? '<a href="/Printer/TestPrint?agentId=' + printer.agentId + '&printerName=' + encodeURIComponent(printer.printerName) + '">' + printer.printerName + '</a>'
-                        : printer.printerName;
+                        ? '<a href="/Printer/TestPrint?agentId=' + printer.agentId + '&printerName=' + encodeURIComponent(printer.printerName) + '">' +
+                          printer.printerName + '</a>' + infoIcon
+                        : printer.printerName + infoIcon;
 
                     $tbody.append(
                         '<tr>' +
@@ -194,6 +241,14 @@
                             '<td>' + printButton + '</td>' +
                         '</tr>'
                     );
+                });
+
+                // Ενεργοποίηση των tooltips για τα νέα στοιχεία
+                var tooltipTriggerList = [].slice.call(document.querySelectorAll('[data-bs-toggle="tooltip"]'));
+                tooltipTriggerList.forEach(function(tooltipTriggerEl) {
+                    new bootstrap.Tooltip(tooltipTriggerEl, {
+                        html: true
+                    });
                 });
             }
 
@@ -206,21 +261,39 @@
             // 5) Fetch & refresh every 10s
             function loadAgentData() {
                 $.getJSON('/api/printerdata', function(data) {
+                    console.log("Received data:", data); // Add debugging
                     updateAgentTable(data);
                     populateAgentDropdown(data);
 
                     // Build printer list from all agents
                     allPrinters = [];
                     data.forEach(function(agent) {
-                        if (agent.printers) {
-                            agent.printers.forEach(function(printer) {
+                        // Normalize property names
+                        var agentId = agent.agentId !== undefined ? agent.agentId : agent.AgentId;
+                        var machineName = agent.machineName !== undefined ? agent.machineName : agent.MachineName;
+                        var location = agent.location !== undefined ? agent.location : agent.Location;
+                        var isOnline = agent.isOnline !== undefined ? agent.isOnline : agent.IsOnline;
+                        var printers = agent.printers !== undefined ? agent.printers : agent.Printers;
+
+                        if (printers) {
+                            printers.forEach(function(printer) {
+                                // Normalize printer property names
+                                var name = printer.name !== undefined ? printer.name : printer.Name;
+                                var status = printer.status !== undefined ? printer.status : printer.Status;
+                                var driverName = printer.driverName !== undefined ? printer.driverName : printer.DriverName;
+                                var ipAddress = printer.ipAddress !== undefined ? printer.ipAddress : printer.IPAddress;
+                                var responseTime = printer.responseTime !== undefined ? printer.responseTime : printer.ResponseTime;
+
                                 allPrinters.push({
-                                    agentId: agent.agentId,
-                                    agentName: agent.machineName,
-                                    agentLocation: agent.location,
-                                    printerName: printer.name,
-                                    printerStatus: printer.status,
-                                    agentIsOnline: agent.isOnline
+                                    agentId: agentId,
+                                    agentName: machineName,
+                                    agentLocation: location || '',
+                                    printerName: name,
+                                    printerStatus: status,
+                                    agentIsOnline: isOnline,
+                                    driverName: driverName || 'Unknown',
+                                    ipAddress: ipAddress || 'Not Available',
+                                    responseTime: responseTime || -1
                                 });
                             });
                         }
@@ -229,6 +302,8 @@
                     // Update printer table, preserving any filter
                     var selectedAgentId = $('#agentSelect').val();
                     updatePrinterTable(allPrinters, selectedAgentId);
+                }).fail(function(jqXHR, textStatus, errorThrown) {
+                    console.error("Error fetching agent data:", textStatus, errorThrown);
                 });
             }
 

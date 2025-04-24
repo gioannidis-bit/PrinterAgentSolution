@@ -6,6 +6,8 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
+using System.Management;
+
 
 namespace PrinterAgent.WebUI.Controllers
 {
@@ -156,5 +158,63 @@ namespace PrinterAgent.WebUI.Controllers
 
             return Json(new { success = false, message = "Agent not found" });
         }
+
+        // GET api/printer/info?agentId={agentId}&printerName={printerName}
+        [HttpGet("info")]
+        public IActionResult GetPrinterInfo(string agentId, string printerName)
+        {
+            // 1) Find the agent
+            if (!AgentDataStore.Data.TryGetValue(agentId, out var agent))
+                return NotFound();
+
+            // 2) Find the printer in that agent
+            var p = agent.Printers?.FirstOrDefault(x => x.Name == printerName);
+            if (p == null)
+                return NotFound();
+
+            // 3) Lookup driver via WMI
+            string driver = "Unknown";
+            try
+            {
+                using var searcher = new System.Management.ManagementObjectSearcher(
+                    "SELECT DriverName FROM Win32_Printer WHERE Name = '" +
+                    printerName.Replace("'", "''") + "'");
+                driver = searcher.Get()
+                    .Cast<System.Management.ManagementObject>()
+                    .Select(mo => mo["DriverName"]?.ToString())
+                    .FirstOrDefault() ?? driver;
+            }
+            catch { /* ignore on error */ }
+
+            // 4) Ping the printer’s IP (if it’s a network path \\host\printer)
+            long pingMs = -1;
+            try
+            {
+                var host = ExtractHostFromName(printerName);
+                if (!string.IsNullOrEmpty(host))
+                {
+                    var reply = new System.Net.NetworkInformation.Ping()
+                                  .Send(host, 2000);
+                    if (reply.Status == System.Net.NetworkInformation.IPStatus.Success)
+                        pingMs = reply.RoundtripTime;
+                }
+            }
+            catch { /* ignore */ }
+
+            return Json(new { driverName = driver, pingMs });
+        }
+
+        // helper to pull “host” out of a UNC printer name \\server\printer
+        private string ExtractHostFromName(string printerName)
+        {
+            if (printerName.StartsWith(@"\\"))
+            {
+                var parts = printerName.TrimStart('\\').Split('\\');
+                return parts.Length > 0 ? parts[0] : null;
+            }
+            return null;
+        }
+
+
     }
 }

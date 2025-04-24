@@ -5,6 +5,7 @@ using System.Collections.Concurrent;
 using System.Collections.Generic;
 using PrinterAgent.WebUI.Hubs;
 using Microsoft.AspNetCore.SignalR;
+using System.Text.Json;
 
 namespace PrinterAgent.WebUI.Controllers
 {
@@ -42,8 +43,26 @@ namespace PrinterAgent.WebUI.Controllers
         [HttpPost]
         public async Task<IActionResult> Post([FromBody] AgentData data)
         {
+            // Καταγράψτε τα εισερχόμενα δεδομένα
+            System.Diagnostics.Debug.WriteLine("Received data from agent: " + JsonSerializer.Serialize(data));
+
             if (data == null || data.Printers == null)
                 return BadRequest("Invalid data.");
+
+            // Για κάθε εκτυπωτή, εξασφαλίστε ότι οι νέες ιδιότητες έχουν default τιμές αν είναι null
+            foreach (var printer in data.Printers)
+            {
+                printer.DriverName = printer.DriverName ?? "Unknown";
+
+                // Fix: Properly set a default value for IP Address
+                printer.IPAddress = printer.IPAddress ?? "Not Available";
+
+                // Fix: Use conditional check for ResponseTime
+                if (printer.ResponseTime <= 0)
+                {
+                    printer.ResponseTime = -1; // Default value for no response time
+                }
+            }
 
             // Ενημερώνουμε την κατάσταση online
             data.IsOnline = true;
@@ -152,7 +171,10 @@ namespace PrinterAgent.WebUI.Controllers
                         AgentLocation = agent.Location ?? "",
                         PrinterName = printer.Name,
                         PrinterStatus = printer.Status,
-                        AgentIsOnline = agent.IsOnline
+                        AgentIsOnline = agent.IsOnline,
+                        DriverName = printer.DriverName,
+                        IPAddress = printer.IPAddress,
+                        ResponseTime = printer.ResponseTime
                     });
                 }
             }
@@ -175,5 +197,8 @@ namespace PrinterAgent.WebUI.Controllers
         public string PrinterName { get; set; }
         public string PrinterStatus { get; set; }
         public bool AgentIsOnline { get; set; }
+        public string DriverName { get; set; } = "Unknown";
+        public string IPAddress { get; set; } = "Not Available";
+        public int ResponseTime { get; set; } = -1;
     }
 }

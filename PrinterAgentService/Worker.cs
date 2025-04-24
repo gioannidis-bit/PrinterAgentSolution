@@ -244,8 +244,14 @@ namespace PrinterAgentService
         {
             try
             {
+                // Επιστρέφουμε στην αρχική υπογραφή της μεθόδου, χωρίς τη λίστα εκτυπωτών
                 await _hub.InvokeAsync("RegisterAgent", _agentId, Environment.MachineName, _location, cancellationToken);
                 _logger.LogInformation("Registered agent ID '{AgentId}' successfully", _agentId);
+
+                // Αφού ολοκληρωθεί η εγγραφή, στέλνουμε ξεχωριστά τους εκτυπωτές
+                var printers = PrinterHelper.GetInstalledPrinters();
+                await _hub.InvokeAsync("UpdatePrinters", _agentId, printers, cancellationToken);
+                _logger.LogInformation("Sent initial printer list with {Count} printers", printers.Count);
             }
             catch (Exception ex)
             {
@@ -274,8 +280,15 @@ namespace PrinterAgentService
 
                     if (_hub.State == HubConnectionState.Connected)
                     {
-                        try { await _hub.InvokeAsync("UpdatePrinters", _agentId, printers, stoppingToken); }
-                        catch (Exception ex) { _logger.LogError(ex, "Error updating printers in hub"); }
+                        try
+                        {
+                            await _hub.InvokeAsync("UpdatePrinters", _agentId, printers, stoppingToken);
+                            _logger.LogInformation("Sent printer information to hub including driver and IP data");
+                        }
+                        catch (Exception ex)
+                        {
+                            _logger.LogError(ex, "Error updating printers in hub");
+                        }
                     }
 
                     using var httpClient = new HttpClient(_handler, disposeHandler: false);
@@ -285,16 +298,35 @@ namespace PrinterAgentService
                         MachineName = Environment.MachineName,
                         Location = _location,
                         Timestamp = DateTime.UtcNow,
-                        Printers = printers
+                        Printers = printers,
+                        IsOnline = true
                     };
-                    var json = JsonSerializer.Serialize(payload);
+
+                    // FIX: Use PascalCase for property names to match server models
+                    var options = new JsonSerializerOptions
+                    {
+                        DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.Never,
+                        PropertyNamingPolicy = null // Use null instead of JsonNamingPolicy.CamelCase to preserve PascalCase
+                    };
+
+                    var json = JsonSerializer.Serialize(payload, options);
                     var content = new StringContent(json, Encoding.UTF8, "application/json");
+
                     var resp = await httpClient.PostAsync(_dataUrl, content, stoppingToken);
 
                     if (resp.IsSuccessStatusCode)
                         _logger.LogInformation("Heartbeat sent");
                     else
+                    {
                         _logger.LogWarning("Heartbeat failed: {Status}", resp.StatusCode);
+                        // Για αποσφαλμάτωση, καταγράψτε το σώμα της απάντησης αν είναι διαθέσιμο
+                        try
+                        {
+                            var errorBody = await resp.Content.ReadAsStringAsync(stoppingToken);
+                            _logger.LogWarning("Error details: {Details}", errorBody);
+                        }
+                        catch { }
+                    }
                 }
                 catch (Exception ex)
                 {
