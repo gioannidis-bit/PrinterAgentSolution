@@ -86,19 +86,39 @@ namespace PrinterAgent.WebUI.Hubs
         // Νέα μέθοδος για ενημέρωση της τοποθεσίας
         public Task UpdateLocation(string agentId, string location)
         {
+            Console.WriteLine($"===== UpdateLocation called for agent: {agentId}, location: {location} =====");
+
             if (_agents.TryGetValue(agentId, out var state))
             {
                 state.Location = location;
                 _agents[agentId] = state;
+                Console.WriteLine($"===== Agent state updated in memory for agent: {agentId} =====");
 
                 // Ενημερώνουμε τον agent για τη νέα τοποθεσία
                 if (!string.IsNullOrEmpty(state.ConnectionId))
                 {
-                    Clients.Client(state.ConnectionId).SendAsync("UpdateLocation", location);
+                    Console.WriteLine($"===== Sending UpdateLocation to connection: {state.ConnectionId} =====");
+                    try
+                    {
+                        Clients.Client(state.ConnectionId).SendAsync("UpdateLocation", location);
+                        Console.WriteLine($"===== UpdateLocation sent successfully =====");
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"===== ERROR sending UpdateLocation: {ex.Message} =====");
+                    }
+                }
+                else
+                {
+                    Console.WriteLine($"===== WARNING: ConnectionId is empty for agent: {agentId} =====");
                 }
 
                 // Ενημερώνουμε όλους τους clients για την αλλαγή
                 Clients.All.SendAsync("AgentStatusChanged", GetAgentStatuses());
+            }
+            else
+            {
+                Console.WriteLine($"===== ERROR: Agent not found: {agentId} =====");
             }
 
             return Task.CompletedTask;

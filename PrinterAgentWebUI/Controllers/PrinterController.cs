@@ -136,26 +136,56 @@ namespace PrinterAgent.WebUI.Controllers
         [HttpPost]
         public async Task<IActionResult> UpdateLocation(string agentId, string location)
         {
+            Console.WriteLine($"===== Controller: UpdateLocation called for agent: {agentId}, location: {location} =====");
+
             if (string.IsNullOrEmpty(agentId) || string.IsNullOrEmpty(location))
             {
+                Console.WriteLine("===== Controller: ERROR - Agent ID and location are required =====");
                 return Json(new { success = false, message = "Agent ID and location are required" });
             }
 
             // Ενημερώνουμε την τοποθεσία του agent
             if (AgentDataStore.Data.TryGetValue(agentId, out var agent))
             {
+                // Ενημερώνουμε το τοπικό αντίγραφο
                 agent.Location = location;
                 AgentDataStore.Data[agentId] = agent;
+                Console.WriteLine($"===== Controller: Updated AgentDataStore for agent: {agentId} =====");
 
                 // Ενημερώνουμε και το AgentConnectionMap
                 AgentConnectionMap.SetLocation(agentId, location);
+                Console.WriteLine($"===== Controller: Updated AgentConnectionMap for agent: {agentId} =====");
+
+                // Ελέγχουμε αν υπάρχει connection ID για τον agent
+                bool hasConnectionId = AgentConnectionMap.TryGetConnection(agentId, out var connectionId);
+                Console.WriteLine($"===== Controller: Agent has connection ID: {hasConnectionId}, Connection: {connectionId} =====");
 
                 // Στέλνουμε την ενημέρωση στον agent
-                await _hub.Clients.All.SendAsync("UpdateLocation", agentId, location);
+                try
+                {
+                    if (hasConnectionId)
+                    {
+                        // Στέλνουμε απευθείας στον συγκεκριμένο client
+                        await _hub.Clients.Client(connectionId).SendAsync("UpdateLocation", location);
+                        Console.WriteLine($"===== Controller: Sent direct message to connection: {connectionId} =====");
+                    }
+                    else
+                    {
+                        // Δοκιμάζουμε να στείλουμε σε όλους τους clients μήπως λάβει ο σωστός
+                        await _hub.Clients.All.SendAsync("UpdateLocation", agentId, location);
+                        Console.WriteLine("===== Controller: Sent message to all clients as fallback =====");
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"===== Controller: ERROR sending update: {ex.Message} =====");
+                    return Json(new { success = false, message = $"Error sending update: {ex.Message}" });
+                }
 
                 return Json(new { success = true, message = "Location updated successfully" });
             }
 
+            Console.WriteLine($"===== Controller: ERROR - Agent not found: {agentId} =====");
             return Json(new { success = false, message = "Agent not found" });
         }
 
