@@ -25,6 +25,7 @@ namespace PrinterAgentService
         private bool _serverWasDown = false;
         private Timer _serverCheckTimer;
         private readonly TimeSpan _serverCheckInterval = TimeSpan.FromSeconds(5);
+        private readonly PrintSpoolerService _printSpooler;
 
         // Server endpoints
         private const string ServerBase = "https://192.168.14.121:7199";
@@ -41,6 +42,10 @@ namespace PrinterAgentService
             {
                 ServerCertificateCustomValidationCallback = (_, _, _, _) => true
             };
+
+            // Initialize the print spooler service
+            // Δημιουργία print spooler service
+            _printSpooler = new PrintSpoolerService(new LoggerFactory().CreateLogger<PrintSpoolerService>());
 
             // Ensure stable GUID and location
             var settingsPath = Path.Combine(AppContext.BaseDirectory, "agent.settings.json");
@@ -295,10 +300,52 @@ namespace PrinterAgentService
                 return Task.CompletedTask;
             };
 
+            // Basic text/RTF print handler
             _hub.On<PrintRequest>("Print", req =>
             {
                 _logger.LogInformation("Print request received: Printer={Printer}", req.PrinterName);
-                PrinterHelper.SendTestPrint(req.PrinterName, req.DocumentContent, null, req.Landscape, req.PaperSize);
+
+                // Create print job
+                var printJob = new PrintJob
+                {
+                    JobId = Guid.NewGuid().ToString(),
+                    PrinterName = req.PrinterName,
+                    DocumentContent = req.DocumentContent,
+                    DocumentFormat = req.DocumentContent.Contains("\\rtf") ? DocumentFormat.Rtf : DocumentFormat.PlainText,
+                    Landscape = req.Landscape,
+                    PaperSize = req.PaperSize
+                };
+
+                // Enqueue for printing
+                _ = _printSpooler.EnqueuePrintJobAsync(printJob);
+            });
+
+            // New universal print handler
+            _hub.On<UniversalPrintRequest>("UniversalPrint", async req =>
+            {
+                _logger.LogInformation("Universal print request received: Printer={Printer}, Format={Format}",
+                    req.PrinterName, req.DocumentFormat);
+
+                // Convert format string to enum
+                DocumentFormat format = DocumentFormat.PlainText;
+                if (Enum.TryParse<DocumentFormat>(req.DocumentFormat, true, out var parsedFormat))
+                {
+                    format = parsedFormat;
+                }
+
+                // Create print job
+                var printJob = new PrintJob
+                {
+                    JobId = Guid.NewGuid().ToString(),
+                    PrinterName = req.PrinterName,
+                    DocumentData = req.DocumentData,
+                    DocumentFormat = format,
+                    Landscape = req.Landscape,
+                    PaperSize = req.PaperSize
+                };
+
+                // Enqueue for printing
+                await _printSpooler.EnqueuePrintJobAsync(printJob);
             });
 
             _hub.On<string>("UpdateLocation", async newLocation =>
@@ -457,6 +504,8 @@ namespace PrinterAgentService
                     var printers = PrinterHelper.GetInstalledPrinters();
                     _logger.LogInformation("Discovered printers: {List}", string.Join(", ", printers.Select(p => p.Name)));
 
+
+
                     if (_hub.State == HubConnectionState.Connected)
                     {
                         try
@@ -487,6 +536,9 @@ namespace PrinterAgentService
         {
             _serverCheckTimer?.Dispose();
 
+            // Stop the print spooler
+            await _printSpooler.StopAsync();
+
             if (_hub != null)
             {
                 try
@@ -509,6 +561,19 @@ namespace PrinterAgentService
 
             await base.StopAsync(cancellationToken);
         }
+    }
+
+    // Model for universal print requests from the hub
+    public class UniversalPrintRequest
+    {
+        public string AgentId { get; set; }
+        public string MachineName { get; set; }
+        public string PrinterName { get; set; }
+        public byte[] DocumentData { get; set; }
+        public string DocumentFormat { get; set; }
+        public bool Landscape { get; set; }
+        public string PaperSize { get; set; }
+        public string Location { get; set; }
     }
 
     public class AgentSettings

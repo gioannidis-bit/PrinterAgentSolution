@@ -158,6 +158,37 @@ namespace PrinterAgent.WebUI.Hubs
             return Task.CompletedTask;
         }
 
+        // Universal Print handler for client-to-client communication
+        public async Task UniversalPrint(UniversalPrintRequest request)
+        {
+            try
+            {
+                Console.WriteLine($"Received universal print request for printer {request.PrinterName} via agent {request.AgentId}");
+
+                // Validate agent
+                if (!_agents.TryGetValue(request.AgentId, out var agent) || !agent.IsOnline)
+                {
+                    Console.WriteLine("Target agent is not available");
+                    return;
+                }
+
+                // Get connection ID
+                if (string.IsNullOrEmpty(agent.ConnectionId))
+                {
+                    Console.WriteLine("Agent connection ID is not available");
+                    return;
+                }
+
+                // Forward the print request to the target agent
+                Console.WriteLine($"Forwarding universal print request to agent connection: {agent.ConnectionId}");
+                await Clients.Client(agent.ConnectionId).SendAsync("UniversalPrint", request);
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Error in universal print: {ex.Message}");
+            }
+        }
+
         // Χειρισμός αποσύνδεσης client
         public override Task OnDisconnectedAsync(Exception exception)
         {
@@ -256,6 +287,19 @@ namespace PrinterAgent.WebUI.Hubs
         }
     }
 
+    // Universal print request model
+    public class UniversalPrintRequest
+    {
+        public string AgentId { get; set; }
+        public string MachineName { get; set; }
+        public string PrinterName { get; set; }
+        public byte[] DocumentData { get; set; }
+        public string DocumentFormat { get; set; }
+        public bool Landscape { get; set; }
+        public string PaperSize { get; set; }
+        public string Location { get; set; }
+    }
+
     // Μοντέλα για την αποθήκευση και αποστολή δεδομένων
 
     public class AgentState
@@ -278,16 +322,16 @@ namespace PrinterAgent.WebUI.Hubs
         public DateTime LastSeen { get; set; }
     }
 
-  public class PrinterStatusDto
-{
-    public string AgentId { get; set; }
-    public string AgentName { get; set; }
-    public string AgentLocation { get; set; }
-    public string PrinterName { get; set; }
-    public string PrinterStatus { get; set; }
-    public bool AgentIsOnline { get; set; }
-    public string DriverName { get; set; } = "Unknown";
-    public string IPAddress { get; set; } = "Not Available";
-    public int ResponseTime { get; set; } = -1;
-}
+    public class PrinterStatusDto
+    {
+        public string AgentId { get; set; }
+        public string AgentName { get; set; }
+        public string AgentLocation { get; set; }
+        public string PrinterName { get; set; }
+        public string PrinterStatus { get; set; }
+        public bool AgentIsOnline { get; set; }
+        public string DriverName { get; set; } = "Unknown";
+        public string IPAddress { get; set; } = "Not Available";
+        public int ResponseTime { get; set; } = -1;
+    }
 }
