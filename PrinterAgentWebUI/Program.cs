@@ -6,6 +6,14 @@ using PrinterAgent.WebUI.Hubs;
 
 var builder = WebApplication.CreateBuilder(args);
 
+if (OperatingSystem.IsWindows())
+{
+    builder.Host.UseWindowsService(options =>
+    {
+        options.ServiceName = "SQL Relay Server";
+    });
+}
+
 
 // Add services to the container.
 builder.Services.AddControllersWithViews();

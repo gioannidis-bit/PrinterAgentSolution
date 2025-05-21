@@ -5,7 +5,12 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
   <UseWindowsService>true</UseWindowsService>
+  <ApplicationIcon>favicon.ico</ApplicationIcon>
 </PropertyGroup>
+
+  <ItemGroup>
+    <Content Include="favicon.ico" />
+  </ItemGroup>
 
   <ItemGroup>
     <PackageReference Include="DocX" Version="4.0.25105.5786" />

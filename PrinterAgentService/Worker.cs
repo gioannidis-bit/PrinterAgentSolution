@@ -28,7 +28,7 @@ namespace PrinterAgentService
         private readonly PrintSpoolerService _printSpooler;
 
         // Server endpoints
-        private const string ServerBase = "https://192.168.14.121:7199";
+        private const string ServerBase = "https://print.hitweb.com.gr";
         private readonly string _dataUrl = $"{ServerBase}/api/printerdata";
         private readonly string _hubUrl = $"{ServerBase}/printHub";
         private readonly string _agentId;

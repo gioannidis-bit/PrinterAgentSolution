@@ -14,6 +14,7 @@ using System.Management;
 using System.Runtime.Versioning;
 using System.Collections.Generic;
 using System.Printing;
+using PrinterAgent.Core;
 
 namespace PrinterAgentService
 {
@@ -68,6 +69,9 @@ namespace PrinterAgentService
 
         #endregion
 
+        // Στατικό αντικείμενο κλειδώματος για RTF printing
+        private static readonly object _printLock = new object();
+
         /// <summary>
         /// Prints a document of any supported format
         /// </summary>
@@ -99,10 +103,9 @@ namespace PrinterAgentService
                         return PrintImage(printerName, documentData, landscape, paperSizeName);
 
                     case DocumentFormat.Rtf:
-                                               // Decode the incoming bytes into an RTF string and hand off to our RTF printer
+                        // Decode the incoming bytes into an RTF string and hand off to our RTF printer
                         var rtfText = Encoding.Default.GetString(documentData);
-                                             return PrintRtf(printerName, rtfText);
-
+                        return PrintRtf(printerName, rtfText);
 
                     case DocumentFormat.Raw:
                         return SendRawDataToPrinter(printerName, documentData);
@@ -122,198 +125,51 @@ namespace PrinterAgentService
             }
         }
 
-
-        // Στατικό αντικείμενο κλειδώματος
-        private static readonly object _printLock = new object();
-
+        /// <summary>
+        /// Prints RTF content without using RichTextBox to avoid threading issues
+        /// </summary>
         private static bool PrintRtf(string printerName, string rtfContent)
         {
             // Κλείδωμα για να αποτρέψουμε ταυτόχρονες κλήσεις
             lock (_printLock)
             {
-                // Create a unique print job name
-                string documentName = $"PrintJob_{Guid.NewGuid()}";
+                string tempRtfPath = Path.Combine(Path.GetTempPath(), $"PrintJob_{Guid.NewGuid()}.rtf");
 
                 try
                 {
-                    // Convert RTF string to byte array
-                    byte[] rtfBytes = Encoding.Default.GetBytes(rtfContent);
+                    // Γράφουμε το RTF σε temporary file
+                    File.WriteAllText(tempRtfPath, rtfContent, Encoding.Default);
 
-                    // Print RTF as raw data
-                    return SendRawDataToPrinter(printerName, rtfBytes);
+                    // Προσπαθούμε πρώτα με shell printing (πιο αξιόπιστο)
+                    if (TryShellPrint(printerName, tempRtfPath))
+                    {
+                        return true;
+                    }
+
+                    // Αν το shell printing αποτύχει, δοκιμάζουμε Word automation
+                    if (TryWordAutomationPrint(printerName, tempRtfPath))
+                    {
+                        return true;
+                    }
+
+                    // Τελευταία επιλογή: Μετατροπή σε plain text και εκτύπωση
+                    return TryPlainTextFallback(printerName, rtfContent);
                 }
                 catch (Exception ex)
                 {
-                    Console.WriteLine($"RTF direct print error: {ex.Message}");
-
-                    // If direct print fails, try shell printing as a last resort
-                    try
-                    {
-                        string tempRtfPath = Path.Combine(Path.GetTempPath(), $"{documentName}.rtf");
-                        File.WriteAllBytes(tempRtfPath, Encoding.Default.GetBytes(rtfContent));
-
-                        // Set up a process to print using the shell
-                        using (var process = new System.Diagnostics.Process())
-                        {
-                            process.StartInfo = new System.Diagnostics.ProcessStartInfo
-                            {
-                                FileName = "cmd.exe",
-                                Arguments = $"/c print \"{tempRtfPath}\" /d:\"{printerName}\"",
-                                UseShellExecute = false,
-                                CreateNoWindow = true,
-                                RedirectStandardOutput = true,
-                                RedirectStandardError = true
-                            };
-
-                            process.Start();
-
-                            // Read output and error
-                            string output = process.StandardOutput.ReadToEnd();
-                            string error = process.StandardError.ReadToEnd();
-
-                            if (!string.IsNullOrEmpty(error))
-                            {
-                                Console.WriteLine($"CMD print error: {error}");
-                            }
-
-                            process.WaitForExit(30000);
-
-                            // Clean up temp file
-                            try { File.Delete(tempRtfPath); } catch { }
-
-                            return (process.ExitCode == 0);
-                        }
-                    }
-                    catch (Exception shellEx)
-                    {
-                        Console.WriteLine($"Shell print fallback error: {shellEx.Message}");
-                        return false;
-                    }
-                }
-            }
-        }
-
-        private static bool ConvertRtfToDocxUsingWord(string rtfPath, string docxPath)
-        {
-            dynamic wordApp = null;
-            dynamic doc = null;
-
-            try
-            {
-                // Create a new instance of Word
-                Type wordType = Type.GetTypeFromProgID("Word.Application");
-                if (wordType == null)
-                {
-                    Console.WriteLine("Microsoft Word is not installed.");
+                    Console.WriteLine($"RTF print error: {ex.Message}");
                     return false;
                 }
-
-                wordApp = Activator.CreateInstance(wordType);
-                wordApp.Visible = false;
-
-                // Open the RTF document
-                doc = wordApp.Documents.Open(rtfPath);
-
-                // Save as DOCX
-                object saveFormat = 16; // wdFormatDocumentDefault (DOCX)
-                doc.SaveAs2(docxPath, saveFormat);
-
-                return true;
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"Word automation error: {ex.Message}");
-                return false;
-            }
-            finally
-            {
-                // Clean up COM objects
-                if (doc != null)
+                finally
                 {
-                    doc.Close(false);
-                    Marshal.ReleaseComObject(doc);
+                    // Καθαρισμός temporary file
+                    CleanupTempFile(tempRtfPath);
                 }
-
-                if (wordApp != null)
-                {
-                    wordApp.Quit();
-                    Marshal.ReleaseComObject(wordApp);
-                }
-
-                // Force garbage collection to release COM objects
-                GC.Collect();
-                GC.WaitForPendingFinalizers();
             }
         }
 
-        private static bool PrintDocxUsingDocXLibrary(string printerName, string docxPath)
-        {
-            try
-            {
-                // Create a separate thread for printing
-                var thread = new Thread(() =>
-                {
-                    try
-                    {
-                        // Load the DOCX document using the DocX library
-                        using (var document = Xceed.Words.NET.DocX.Load(docxPath))
-                        {
-                            // Create a PrintDocument
-                            using (var pd = new PrintDocument())
-                            {
-                                pd.PrinterSettings.PrinterName = printerName;
-                                pd.PrintController = new StandardPrintController();
-
-                                if (!pd.PrinterSettings.IsValid)
-                                {
-                                    Console.WriteLine($"Printer '{printerName}' is invalid.");
-                                    return;
-                                }
-
-                                // TODO: Set up a proper print handler for DocX content
-                                // This is a simplified approach - we'll use shell printing instead
-
-                                // For now, save and close the document
-                                document.Save();
-                            }
-                        }
-
-                        // Use shell printing as it's more reliable for complex documents
-                        using (var process = new System.Diagnostics.Process())
-                        {
-                            process.StartInfo = new System.Diagnostics.ProcessStartInfo
-                            {
-                                FileName = "rundll32.exe",
-                                Arguments = $"shell32.dll,ShellExec_RunDLL printto \"{docxPath}\" \"{printerName}\"",
-                                UseShellExecute = false,
-                                CreateNoWindow = true
-                            };
-
-                            process.Start();
-                            process.WaitForExit(30000); // 30 second timeout
-                        }
-                    }
-                    catch (Exception ex)
-                    {
-                        Console.WriteLine($"DOCX print error: {ex.Message}");
-                    }
-                });
-
-                thread.SetApartmentState(ApartmentState.STA);
-                thread.IsBackground = true;
-                thread.Start();
-                thread.Join(60000); // 60 second timeout
-
-                return true;
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"DOCX print error: {ex.Message}");
-                return false;
-            }
-        }
-
-        private static bool PrintUsingShell(string printerName, string filePath)
+        // Μέθοδος για shell printing (πιο αξιόπιστη)
+        private static bool TryShellPrint(string printerName, string filePath)
         {
             try
             {
@@ -324,17 +180,42 @@ namespace PrinterAgentService
                         FileName = "rundll32.exe",
                         Arguments = $"shell32.dll,ShellExec_RunDLL printto \"{filePath}\" \"{printerName}\"",
                         UseShellExecute = false,
-                        CreateNoWindow = true
+                        CreateNoWindow = true,
+                        RedirectStandardOutput = true,
+                        RedirectStandardError = true
                     };
 
                     process.Start();
-                    if (!process.WaitForExit(30000)) // 30 second timeout
+
+                    // Διαβάζουμε output για debugging
+                    string output = process.StandardOutput.ReadToEnd();
+                    string error = process.StandardError.ReadToEnd();
+
+                    if (!string.IsNullOrEmpty(error))
                     {
-                        Console.WriteLine("Print process timed out");
+                        Console.WriteLine($"Shell print stderr: {error}");
+                    }
+
+                    bool finished = process.WaitForExit(30000); // 30 second timeout
+
+                    if (!finished)
+                    {
+                        Console.WriteLine("Shell print process timed out");
+                        try { process.Kill(); } catch { }
                         return false;
                     }
 
-                    return (process.ExitCode == 0);
+                    bool success = (process.ExitCode == 0);
+                    if (success)
+                    {
+                        Console.WriteLine("Shell print completed successfully");
+                    }
+                    else
+                    {
+                        Console.WriteLine($"Shell print failed with exit code: {process.ExitCode}");
+                    }
+
+                    return success;
                 }
             }
             catch (Exception ex)
@@ -344,31 +225,179 @@ namespace PrinterAgentService
             }
         }
 
-        private static void CleanupTempFiles(string[] filePaths)
+        // Μέθοδος για Word automation printing
+        private static bool TryWordAutomationPrint(string printerName, string filePath)
         {
-            foreach (var filePath in filePaths)
+            dynamic wordApp = null;
+            dynamic doc = null;
+
+            try
             {
-                if (File.Exists(filePath))
+                // Δημιουργούμε instance του Word
+                Type wordType = Type.GetTypeFromProgID("Word.Application");
+                if (wordType == null)
                 {
-                    // Try a few times to delete the file in case it's locked
-                    for (int i = 0; i < 3; i++)
+                    Console.WriteLine("Microsoft Word is not installed");
+                    return false;
+                }
+
+                wordApp = Activator.CreateInstance(wordType);
+                wordApp.Visible = false;
+                wordApp.DisplayAlerts = false; // Απενεργοποιούμε alerts
+
+                // Ανοίγουμε το RTF document
+                doc = wordApp.Documents.Open(filePath, ReadOnly: true);
+
+                // Ρυθμίζουμε τον εκτυπωτή
+                wordApp.ActivePrinter = printerName;
+
+                // Εκτυπώνουμε το έγγραφο
+                doc.PrintOut(
+                    Background: false,  // Περιμένουμε να ολοκληρωθεί η εκτύπωση
+                    Copies: 1,
+                    Range: 0, // wdPrintAllDocument
+                    OutputFileName: "",
+                    From: "",
+                    To: "",
+                    Item: 7, // wdPrintDocumentContent
+                    PrintToFile: false,
+                    Collate: true,
+                    FileName: "",
+                    ManualDuplexPrint: false
+                );
+
+                // Περιμένουμε λίγο για να ολοκληρωθεί η εκτύπωση
+                System.Threading.Thread.Sleep(2000);
+
+                Console.WriteLine("Word automation print completed successfully");
+                return true;
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Word automation error: {ex.Message}");
+                return false;
+            }
+            finally
+            {
+                // Καθαρισμός COM objects
+                try
+                {
+                    if (doc != null)
                     {
-                        try
-                        {
-                            File.Delete(filePath);
-                            break; // File deleted successfully
-                        }
-                        catch
-                        {
-                            // Wait a bit before trying again
-                            Thread.Sleep(500);
-                        }
+                        doc.Close(false); // Κλείνουμε χωρίς αποθήκευση
+                        System.Runtime.InteropServices.Marshal.ReleaseComObject(doc);
                     }
                 }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"Error closing Word document: {ex.Message}");
+                }
+
+                try
+                {
+                    if (wordApp != null)
+                    {
+                        wordApp.Quit(false); // Κλείνουμε χωρίς αποθήκευση
+                        System.Runtime.InteropServices.Marshal.ReleaseComObject(wordApp);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"Error closing Word application: {ex.Message}");
+                }
+
+                // Επιβάλλουμε garbage collection για καθαρισμό COM objects
+                GC.Collect();
+                GC.WaitForPendingFinalizers();
+                GC.Collect();
             }
         }
 
+        // Fallback μέθοδος: Μετατροπή RTF σε plain text και εκτύπωση
+        private static bool TryPlainTextFallback(string printerName, string rtfContent)
+        {
+            try
+            {
+                Console.WriteLine("Attempting plain text fallback for RTF printing");
 
+                // Απλούστευση RTF σε plain text (βασική μετατροπή)
+                string plainText = ConvertRtfToPlainText(rtfContent);
+
+                // Χρησιμοποιούμε την υπάρχουσα μέθοδο για εκτύπωση plain text
+                return PrinterHelper.SendTestPrint(printerName, plainText, null, false, "A4");
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Plain text fallback error: {ex.Message}");
+                return false;
+            }
+        }
+
+        // Βοηθητική μέθοδος για μετατροπή RTF σε plain text (βασική)
+        private static string ConvertRtfToPlainText(string rtfText)
+        {
+            try
+            {
+                // Αφαιρούμε RTF control words και formatting
+                string text = rtfText;
+
+                // Αφαιρούμε RTF header
+                if (text.StartsWith(@"{\rtf"))
+                {
+                    int firstSpace = text.IndexOf(' ');
+                    if (firstSpace > 0)
+                    {
+                        text = text.Substring(firstSpace);
+                    }
+                }
+
+                // Αφαιρούμε control words
+                text = System.Text.RegularExpressions.Regex.Replace(text, @"\\[a-zA-Z0-9]+(-?[0-9]+)?[ ]?", "");
+
+                // Αφαιρούμε άγκιστρα
+                text = text.Replace("{", "").Replace("}", "");
+
+                // Αφαιρούμε escape sequences
+                text = System.Text.RegularExpressions.Regex.Replace(text, @"\\'[0-9a-fA-F]{2}", " ");
+
+                // Καθαρίζουμε whitespace
+                text = System.Text.RegularExpressions.Regex.Replace(text, @"\s+", " ").Trim();
+
+                return text;
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"RTF to text conversion error: {ex.Message}");
+                return "Error converting RTF content to text";
+            }
+        }
+
+        // Βοηθητική μέθοδος για καθαρισμό temporary files
+        private static void CleanupTempFile(string filePath)
+        {
+            if (string.IsNullOrEmpty(filePath) || !File.Exists(filePath))
+                return;
+
+            // Δοκιμάζουμε να διαγράψουμε το αρχείο μέχρι 5 φορές με καθυστέρηση
+            for (int i = 0; i < 5; i++)
+            {
+                try
+                {
+                    File.Delete(filePath);
+                    return; // Επιτυχής διαγραφή
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"Cleanup attempt {i + 1} failed: {ex.Message}");
+                    if (i < 4) // Αν δεν είναι η τελευταία προσπάθεια
+                    {
+                        System.Threading.Thread.Sleep(500); // Περιμένουμε 500ms
+                    }
+                }
+            }
+
+            Console.WriteLine($"Failed to delete temporary file: {filePath}");
+        }
 
         /// <summary>
         /// Prints a PDF document
@@ -631,8 +660,6 @@ namespace PrinterAgentService
         /// <summary>
         /// Sends raw printer data directly to the printer
         /// </summary>
-        // Τμήμα του UniversalPrinter.cs με τη διορθωμένη μέθοδο SendRawDataToPrinter
-
         private static bool SendRawDataToPrinter(string printerName, byte[] rawData)
         {
             IntPtr printerHandle = IntPtr.Zero;
@@ -653,8 +680,6 @@ namespace PrinterAgentService
                     Console.WriteLine($"Failed to open printer: {printerName}");
                     return false;
                 }
-
-                //printerHandle = pd.pDevMode;
 
                 // Χρήση αναφοράς για το di επίσης
                 var di = new DOC_INFO_1

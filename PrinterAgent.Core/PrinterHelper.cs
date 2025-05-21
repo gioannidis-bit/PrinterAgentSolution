@@ -8,6 +8,7 @@ using System.Runtime.Versioning;
 using System.Printing;
 using System.Net.NetworkInformation;
 using System.Text.RegularExpressions;
+using System.IO;
 
 namespace PrinterAgent.Core
 {
@@ -15,24 +16,8 @@ namespace PrinterAgent.Core
     [SupportedOSPlatform("windows")]
     public static class PrinterHelper
     {
-        // Win32 structures for RTF rendering
-        [StructLayout(LayoutKind.Sequential)]
-        private struct RECT { public int Left, Top, Right, Bottom; }
-        [StructLayout(LayoutKind.Sequential)]
-        private struct CHARRANGE { public int cpMin, cpMax; }
-        [StructLayout(LayoutKind.Sequential)]
-        private struct FORMATRANGE
-        {
-            public IntPtr hdc;
-            public IntPtr hdcTarget;
-            public RECT rc;
-            public RECT rcPage;
-            public CHARRANGE charrange;
-        }
-        private const int WM_USER = 0x0400;
-        private const int EM_FORMATRANGE = WM_USER + 57;
-        [DllImport("user32.dll", CharSet = CharSet.Auto)]
-        private static extern IntPtr SendMessage(IntPtr hWnd, int msg, IntPtr wParam, IntPtr lParam);
+        // Static lock for RTF printing
+        private static readonly object _rtfPrintLock = new object();
 
         /// <summary>Get installed printers on the machine.</summary>
         public static List<PrinterInfo> GetInstalledPrinters()
@@ -217,7 +202,7 @@ namespace PrinterAgent.Core
         }
 
         /// <summary>
-        /// Print RTF content using a hidden RichTextBox for formatting.
+        /// Print RTF content using shell printing instead of RichTextBox
         /// </summary>
         public static bool PrintRtf(
             string printerName,
@@ -226,67 +211,274 @@ namespace PrinterAgent.Core
             string paperSizeName)
         {
             if (string.IsNullOrWhiteSpace(printerName)) return false;
-            try
+
+            // Static lock to prevent concurrent access
+            lock (_rtfPrintLock)
             {
-                using var rtb = new RichTextBox { Rtf = rtfContent };
-                using var pd = new PrintDocument();
-                pd.PrinterSettings.PrinterName = printerName;
-                if (!pd.PrinterSettings.IsValid)
+                string tempRtfPath = Path.Combine(Path.GetTempPath(), $"PrintJob_{Guid.NewGuid()}.rtf");
+
+                try
                 {
-                    Console.WriteLine($"Printer '{printerName}' is invalid.");
+                    // Write RTF content to temporary file
+                    File.WriteAllText(tempRtfPath, rtfContent, System.Text.Encoding.Default);
+
+                    // Try shell printing first
+                    if (TryShellPrintRtf(printerName, tempRtfPath))
+                    {
+                        Console.WriteLine("RTF printed successfully via shell");
+                        return true;
+                    }
+
+                    // Try Word automation as fallback
+                    if (TryWordPrintRtf(printerName, tempRtfPath))
+                    {
+                        Console.WriteLine("RTF printed successfully via Word automation");
+                        return true;
+                    }
+
+                    // Last resort: convert to plain text and print
+                    Console.WriteLine("Trying plain text fallback for RTF");
+                    return TryPlainTextPrintRtf(printerName, rtfContent, landscape, paperSizeName);
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine("RTF print error: " + ex.Message);
                     return false;
                 }
-                pd.DefaultPageSettings.Landscape = landscape;
-                pd.DefaultPageSettings.PaperSize = paperSizeName.Equals("Letter", StringComparison.OrdinalIgnoreCase)
-                    ? new PaperSize("Letter", 850, 1100)
-                    : new PaperSize("A4", 827, 1169);
-
-                int startChar = 0;
-                pd.PrintPage += (s, e) =>
+                finally
                 {
-                    float twips = 1440 / e.Graphics.DpiX;
-                    var mb = e.MarginBounds;
-                    RECT rectPrint = new()
+                    // Clean up temporary file
+                    CleanupTempFileRtf(tempRtfPath);
+                }
+            }
+        }
+
+        // Shell printing method for RTF
+        private static bool TryShellPrintRtf(string printerName, string filePath)
+        {
+            try
+            {
+                Console.WriteLine($"Attempting shell print: {filePath} to {printerName}");
+
+                using (var process = new System.Diagnostics.Process())
+                {
+                    process.StartInfo = new System.Diagnostics.ProcessStartInfo
                     {
-                        Left = (int)(mb.Left * twips),
-                        Top = (int)(mb.Top * twips),
-                        Right = (int)(mb.Right * twips),
-                        Bottom = (int)(mb.Bottom * twips)
+                        FileName = "rundll32.exe",
+                        Arguments = $"shell32.dll,ShellExec_RunDLL printto \"{filePath}\" \"{printerName}\"",
+                        UseShellExecute = false,
+                        CreateNoWindow = true,
+                        RedirectStandardOutput = true,
+                        RedirectStandardError = true
                     };
-                    var pb = e.PageBounds;
-                    RECT rectPage = new()
+
+                    process.Start();
+
+                    // Read any output for debugging
+                    string output = process.StandardOutput.ReadToEnd();
+                    string error = process.StandardError.ReadToEnd();
+
+                    if (!string.IsNullOrEmpty(output))
                     {
-                        Left = 0,
-                        Top = 0,
-                        Right = (int)(pb.Width * twips),
-                        Bottom = (int)(pb.Height * twips)
-                    };
-                    CHARRANGE cr = new() { cpMin = startChar, cpMax = rtb.TextLength };
-                    FORMATRANGE fr = new()
+                        Console.WriteLine($"Shell print output: {output}");
+                    }
+
+                    if (!string.IsNullOrEmpty(error))
                     {
-                        hdc = e.Graphics.GetHdc(),
-                        hdcTarget = e.Graphics.GetHdc(),
-                        rc = rectPrint,
-                        rcPage = rectPage,
-                        charrange = cr
-                    };
-                    IntPtr lParam = Marshal.AllocCoTaskMem(Marshal.SizeOf(fr));
-                    Marshal.StructureToPtr(fr, lParam, false);
-                    IntPtr res = SendMessage(rtb.Handle, EM_FORMATRANGE, (IntPtr)1, lParam);
-                    e.Graphics.ReleaseHdc(fr.hdc);
-                    e.Graphics.ReleaseHdc(fr.hdcTarget);
-                    Marshal.FreeCoTaskMem(lParam);
-                    startChar = res.ToInt32();
-                    e.HasMorePages = startChar < rtb.TextLength;
-                };
-                pd.Print();
+                        Console.WriteLine($"Shell print error output: {error}");
+                    }
+
+                    bool finished = process.WaitForExit(30000); // 30 second timeout
+
+                    if (!finished)
+                    {
+                        Console.WriteLine("Shell print process timed out");
+                        try { process.Kill(); } catch { }
+                        return false;
+                    }
+
+                    Console.WriteLine($"Shell print exit code: {process.ExitCode}");
+                    return (process.ExitCode == 0);
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Shell print exception: {ex.Message}");
+                return false;
+            }
+        }
+
+        // Word automation method for RTF
+        private static bool TryWordPrintRtf(string printerName, string filePath)
+        {
+            dynamic wordApp = null;
+            dynamic doc = null;
+
+            try
+            {
+                Console.WriteLine($"Attempting Word automation print: {filePath} to {printerName}");
+
+                // Create Word application instance
+                Type wordType = Type.GetTypeFromProgID("Word.Application");
+                if (wordType == null)
+                {
+                    Console.WriteLine("Microsoft Word is not installed");
+                    return false;
+                }
+
+                wordApp = Activator.CreateInstance(wordType);
+                wordApp.Visible = false;
+                wordApp.DisplayAlerts = false;
+
+                // Open the RTF document
+                doc = wordApp.Documents.Open(filePath, ReadOnly: true);
+
+                // Set the printer
+                wordApp.ActivePrinter = printerName;
+
+                // Print the document
+                doc.PrintOut(
+                    Background: false,
+                    Copies: 1,
+                    Range: 0, // wdPrintAllDocument
+                    PrintToFile: false,
+                    Collate: true
+                );
+
+                // Wait for print to complete
+                System.Threading.Thread.Sleep(2000);
+
+                Console.WriteLine("Word automation print completed");
                 return true;
             }
             catch (Exception ex)
             {
-                Console.WriteLine("RTF print error: " + ex.Message);
+                Console.WriteLine($"Word automation error: {ex.Message}");
                 return false;
             }
+            finally
+            {
+                // Clean up COM objects
+                try
+                {
+                    if (doc != null)
+                    {
+                        doc.Close(false);
+                        System.Runtime.InteropServices.Marshal.ReleaseComObject(doc);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"Error closing Word document: {ex.Message}");
+                }
+
+                try
+                {
+                    if (wordApp != null)
+                    {
+                        wordApp.Quit(false);
+                        System.Runtime.InteropServices.Marshal.ReleaseComObject(wordApp);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"Error closing Word application: {ex.Message}");
+                }
+
+                // Force garbage collection
+                GC.Collect();
+                GC.WaitForPendingFinalizers();
+                GC.Collect();
+            }
+        }
+
+        // Plain text fallback method
+        private static bool TryPlainTextPrintRtf(string printerName, string rtfContent, bool landscape, string paperSizeName)
+        {
+            try
+            {
+                Console.WriteLine("Converting RTF to plain text for fallback printing");
+
+                // Convert RTF to plain text (basic conversion)
+                string plainText = ConvertRtfToPlainTextHelper(rtfContent);
+
+                Console.WriteLine($"Converted text length: {plainText.Length} characters");
+
+                // Use the existing SendTestPrint method
+                return SendTestPrint(printerName, plainText, null, landscape, paperSizeName);
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Plain text fallback error: {ex.Message}");
+                return false;
+            }
+        }
+
+        // Helper method to convert RTF to plain text
+        private static string ConvertRtfToPlainTextHelper(string rtfText)
+        {
+            try
+            {
+                // Remove RTF control words and formatting
+                string text = rtfText;
+
+                // Remove RTF header
+                if (text.StartsWith(@"{\rtf"))
+                {
+                    int firstSpace = text.IndexOf(' ');
+                    if (firstSpace > 0)
+                    {
+                        text = text.Substring(firstSpace);
+                    }
+                }
+
+                // Remove control words
+                text = System.Text.RegularExpressions.Regex.Replace(text, @"\\[a-zA-Z0-9]+(-?[0-9]+)?[ ]?", "");
+
+                // Remove braces
+                text = text.Replace("{", "").Replace("}", "");
+
+                // Remove escape sequences
+                text = System.Text.RegularExpressions.Regex.Replace(text, @"\\'[0-9a-fA-F]{2}", " ");
+
+                // Clean up whitespace
+                text = System.Text.RegularExpressions.Regex.Replace(text, @"\s+", " ").Trim();
+
+                return text;
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"RTF to text conversion error: {ex.Message}");
+                return "Error converting RTF content";
+            }
+        }
+
+        // Helper method to clean up temporary files
+        private static void CleanupTempFileRtf(string filePath)
+        {
+            if (string.IsNullOrEmpty(filePath) || !File.Exists(filePath))
+                return;
+
+            // Try to delete the file up to 5 times with delays
+            for (int i = 0; i < 5; i++)
+            {
+                try
+                {
+                    File.Delete(filePath);
+                    Console.WriteLine($"Successfully deleted temp file: {filePath}");
+                    return; // Success
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"File cleanup attempt {i + 1} failed: {ex.Message}");
+                    if (i < 4) // Not the last attempt
+                    {
+                        System.Threading.Thread.Sleep(500); // Wait 500ms
+                    }
+                }
+            }
+
+            Console.WriteLine($"Failed to delete temporary RTF file: {filePath}");
         }
     }
 }
